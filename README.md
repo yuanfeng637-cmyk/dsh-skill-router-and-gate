@@ -109,3 +109,24 @@ the judge, or the gate rules.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## 中文速览
+
+**做什么**：给 DSH 补两层技能控制 ——
+① **候选**：每轮由一次独立模型判定，读实时技能目录，注入排好序的候选（判定失败则退回 9 路词法打分）；
+② **硬闸**：工具调用要解析受管格式（xlsx / docx / pptx / pdf / csv-tsv）而对应技能**本会话从未加载**时，
+直接 **deny**，并告诉你先加载哪个技能。
+
+**装**：`dsh plugin --profile <配置名> add "file:<本目录绝对路径>"` → **重启 DSH**（插件代码不热重载）。
+
+**用**：`/skill-gate status` 看状态与账本；`/skill-gate on|off` 即时开关；
+`/skill-gate eval <fixtures.json>` 跑离线标定。
+
+**配**：环境变量前缀 `DSH_SKILL_GATE_*`（各项默认值见上表）。总开关 `DSH_SKILL_GATE=0`；
+只关闸、保留候选：`DSH_SKILL_GATE_SKILL_GATE=0`。
+
+**排错**：没出现候选 → 看 `/skill-gate status` 与追踪账本 `~/.dsh/skill-gate-trace.ndjson`；
+被闸拦 → 按提示加载技能后**原样重发**同一条命令；同一技能被拦满 3 次会自动放行（`DSH_SKILL_GATE_SKILL_GATE_MAX_DENY`）；
+改了代码没生效 → 插件不热重载，**重启 DSH**；用 `file:` 安装的还要先把改动拷进 profile。
+
+**设计取舍、阈值依据与全部实测记录**（中文）：见 [`docs/DESIGN.md`](docs/DESIGN.md)。
