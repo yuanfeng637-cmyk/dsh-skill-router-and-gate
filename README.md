@@ -23,15 +23,17 @@ is refused until that skill is loaded.
 # from a local checkout (verified)
 dsh plugin --profile <profile> add "file:/abs/path/to/dsh-skill-router-and-gate"
 
-# straight from this repository (NOT verified — needs a host that accepts `github:` specs)
+# straight from this repository (verified: npm resolves the spec; the package manager clones it)
 dsh plugin --profile <profile> add "github:yuanfeng637-cmyk/dsh-skill-router-and-gate"
+
+# same thing over SSH, for networks where HTTPS to github.com is blocked:
+dsh plugin --profile <profile> add "git+ssh://git@github.com/yuanfeng637-cmyk/dsh-skill-router-and-gate.git"
 ```
 
 Then **restart DSH** — plugin code is not hot-reloaded.
 
 - **Node** `^22.19.0 || >=24.0.0`
-- **DSH** peer range as declared in `package.json`:
-  `>=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0` (developed and verified against **0.2.0-rc.2**)
+- **DSH**: `>=0.1.5-rc.1 <0.3.0-0` (as declared in `package.json`; developed and verified against **0.2.0-rc.2**)
 - `@deepseek-ai/dsh`, `@deepseek-ai/dsh-llm` and `@deepseek-ai/dsh-skill` are **optional peers** — the profile provides them.
 
 ## What you will see

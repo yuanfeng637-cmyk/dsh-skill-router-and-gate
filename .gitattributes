@@ -1,0 +1,5 @@
+# Keep line endings identical for every contributor and on every platform.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.zip binary
