@@ -1,0 +1,68 @@
+{
+  "name": "dsh-skill-router-and-gate",
+  "version": "0.1.0",
+  "description": "Two-layer skill control for DeepSeek Harness: (1) a per-turn LLM judge — with a 9-way lexical fallback — that reads the live skill catalog and injects a ranked shortlist of the skills a task actually needs; (2) a hard gate on tools/pre-execute that DENIES a tool call when it requires a managed format (xlsx/docx/pptx/pdf/csv-tsv) but the matching skill was never loaded. Routing picks; the gate enforces.",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/*.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0",
+    "@deepseek-ai/dsh-llm": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0",
+    "@deepseek-ai/dsh-skill": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-skill": {
+      "optional": true
+    }
+  },
+  "license": "MIT",
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "enforcement",
+    "guardrail",
+    "long-horizon",
+    "retrieval",
+    "skill-gate",
+    "skill-router",
+    "skill-routing"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yuanfeng637-cmyk/dsh-skill-router-and-gate.git"
+  },
+  "homepage": "https://github.com/yuanfeng637-cmyk/dsh-skill-router-and-gate#readme",
+  "bugs": {
+    "url": "https://github.com/yuanfeng637-cmyk/dsh-skill-router-and-gate/issues"
+  },
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check lib/index.js && node --check lib/judge.js && node --check lib/skillgate.js"
+  }
+}

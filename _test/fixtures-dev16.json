@@ -1,0 +1,18 @@
+[
+  { "id": "c01", "query": "你确定吗", "expect": ["claim-check"] },
+  { "id": "c02", "query": "装好了吗", "expect": ["claim-check"] },
+  { "id": "c03", "query": "你把我codex缓存删了干什么", "expect": ["claim-check"] },
+  { "id": "c04", "query": "帮我用 RDP4 检测一下重组", "expect": ["rdp4-recomb-mosaic"] },
+  { "id": "c05", "query": "删了之后要重跑吗", "expect": ["claim-check"] },
+  { "id": "c06", "query": "清理一下C盘吧", "expect": ["claim-check"] },
+  { "id": "c07", "query": "写论文的时候注意引用格式", "expect": ["paper-cn"] },
+  { "id": "c08", "query": "用 RDP4 检测重组", "expect": ["rdp4-recomb-mosaic"] },
+  { "id": "c09", "query": "午饭吃什么", "expect": [] },
+  { "id": "c10", "query": "今天天气怎么样", "expect": [] },
+  { "id": "c11", "query": "哈哈哈", "expect": [] },
+  { "id": "c12", "query": "随便聊聊", "expect": [] },
+  { "id": "c13", "query": "我做这个skill是为了使deepseek拥有类似codex在进行任务时主动读取、选择和运行相关skill的能力", "expect": [] },
+  { "id": "c14", "query": "先回答问题", "expect": [] },
+  { "id": "c15", "query": "这玩意是默认读取的吗", "expect": [] },
+  { "id": "c16", "query": "帮我把这批序列做正选择分析", "expect": ["hyphy-pselection"] }
+]

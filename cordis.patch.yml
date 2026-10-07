@@ -1,0 +1,10 @@
+# dsh-skill-router-and-gate — 一条 row。
+#
+# 它只做一件事：在 `agent/pre-step` 上对每轮输入跑检索，把 top-k 技能作为一条
+# **增量** UserMessage 注入。不改任何现有 row，不注册 Tool，不碰任何状态。
+#
+# 停用/卸载后运行时立即恢复原状（bundle remove 即可）。
+
+- insert:
+    - id: skill-gate
+      name: dsh-skill-router-and-gate
