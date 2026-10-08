@@ -646,3 +646,27 @@ fixtures 是数组：`[{"id":"c01","query":"你确定吗","expect":["claim-check
 ## 变更记录
 
 - **2026-10-07｜两次改名**：`dsh-skill-router` → `dsh-skill-gate`（原名只说了「路由」这一半） → **本名 `dsh-skill-router-and-gate`**（用户口径：名字写长、两层都点出来）。短名 `skill-gate` 保留给命令与 env。同批变更：env 前缀 `DSH_SKILL_ROUTER_*` → `DSH_SKILL_GATE_*`；斜杠命令 `/skill-router` → `/skill-gate`；trace 文件 `~/.dsh/skill-gate-trace.ndjson`、开关文件 `~/.dsh/skill-gate.off`。**未发布过 ⇒ 不保留旧名兼容**。
+
+---
+
+## v14.2（2026-10-08）：按外部评审修掉的 4 条
+
+评审（外部模型，**静态阅读** `f0b4b2f`，未克隆未跑测试）提了 4 条风险，我逐条核到行号、**全部成立**，据此修：
+
+1. **搜索豁免漏管道后半段**（`skillgate.js`）：旧 `SEARCH_ONLY` 只看语句开头 ⇒
+   `grep x f | python -c "import openpyxl"` 被整条豁免。现改为 `isPureSearch()`：
+   **引号外**出现 `|`/`&` 就不豁免（引号里的 `|` 是搜索模式，继续豁免）。
+2. **判定员全幻觉名字被当成合法 none**（`judge.js`）：`picks=[]` 且 `unknown>0` ⇒ 现在返回
+   `ok:false, reason:"all-unknown"`，让调用方走词法兜底；**空数组仍是合法 none**（有回归用例守住）。
+3. **闸门状态跨会话共享 + 执行前就解锁**（`index.js`）：`loadedSkills`/`gateDenies` 改成
+   `Map<SessionId, …>`（键取活契约里的 `exec.agent.id`）；登记点从 `tools/pre-execute`
+   移到 **`tools/post-execute`**，且要求 `result.isError === false`。
+   （依据：活契约原文 "Scope-filtered dispatch … agent-scoped listeners receive only that agent's calls"；
+   `ToolExecutionInput.agent?: Agent`；事件目录里有 `tools/post-execute`。）
+4. **超时依赖 adapter 响应 abort**（`judge.js`）：`withTimeout` 新增到点即兑现的 `timeoutHit`，
+   `runJudge` 用 `Promise.race([collectStream, timeoutHit])` ⇒ **忽略 abort 的流也按时返回**；
+   迟到者的 rejection 被吞掉，避免 unhandledRejection。
+
+**测试**：新增 6 个用例（搜索\|解析 ×3、`&`/`&&` ×2、引号纯搜索 ×3、全幻觉/空数组 ×2、忽略 abort 的流 ×1）。
+**版本**：`VERSION = 15`、`package.json` 0.1.1。
+**本轮未做**：`/skill-gate status` 的输出仍是中文（面向国际用户的下一个候选改动）。

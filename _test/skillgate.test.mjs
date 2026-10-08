@@ -205,3 +205,21 @@ test("边界：只看得到命令行的脚本执行 ⇒ 不拦（有意留的余
   ok("Get-Content .\\script.py | python -");
   ok(".\\script.ps1");
 });
+
+/* ─────────── ⑤ v14.2 回归：搜索豁免不能放过管道后半段（外部评审） ─────────── */
+test("拦：搜索命令 + 管道 + 解析（旧版整条豁免 = 漏拦）", () => {
+  denied("Select-String -Path 'D:\\x\\*.py' | python -c \"import openpyxl; openpyxl.load_workbook(p)\"", "office-xlsx");
+  denied("grep -n foo f.txt | python -c \"import pandas as pd; pd.read_excel('a.xlsx')\"", "office-xlsx");
+  denied("Select-String a f | python -c \"import csv; csv.DictReader(open('x.csv'))\"", "tabular-read");
+});
+
+test("拦：搜索命令与解析用 `&` / `&&` 串联", () => {
+  denied("Select-String a f & python -c \"import openpyxl\"", "office-xlsx");
+  denied("grep a f && python -c \"import fitz; fitz.open(p)\"", "pdf");
+});
+
+test("放行：引号里的 `|` 仍是纯搜索（v14.1 既有豁免不能被这次修坏）", () => {
+  ok("Select-String -Path 'D:\\x\\*.py' -Pattern 'openpyxl|load_workbook'");
+  ok("grep -E 'DictReader|read_excel' f.txt");
+  ok("Select-String a f | Select-String b");
+});

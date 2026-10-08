@@ -1,6 +1,6 @@
 {
   "name": "dsh-skill-router-and-gate",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Two-layer skill control for DeepSeek Harness: (1) a per-turn LLM judge — with a 9-way lexical fallback — that reads the live skill catalog and injects a ranked shortlist of the skills a task actually needs; (2) a hard gate on tools/pre-execute that DENIES a tool call when it requires a managed format (xlsx/docx/pptx/pdf/csv-tsv) but the matching skill was never loaded. Routing picks; the gate enforces.",
   "type": "module",
   "main": "./lib/index.js",

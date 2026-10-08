@@ -85,6 +85,17 @@ t("parse：无效输出必须 ok=false（不能被当成 none）", () => {
     assert.equal(parseJudgeOutput(bad, allowed).ok, false, "should fail: " + bad);
   }
 });
+t("parse：全是幻觉名字 ⇒ ok=false（v14.2，不能当成合法 none）", () => {
+  const r = parseJudgeOutput('{"skills":[{"name":"not-a-skill"},{"name":"also-fake"}]}', allowed);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, "all-unknown");
+  assert.deepEqual(r.unknown, ["not-a-skill", "also-fake"]);
+});
+t("parse：空数组仍是合法 none（v14.2 的修正不能把它也判成无效）", () => {
+  const r = parseJudgeOutput('{"skills":[]}', allowed);
+  assert.equal(r.ok, true);
+  assert.equal(r.decision, "none");
+});
 
 // 4) 流拼装
 async function collectOf(chunks) {
@@ -208,6 +219,20 @@ const judgeTests = (async () => {
   assert.ok(Date.now() - started < 3000, "超时必须及时返回");
   pass += 1;
   console.log("  ok   runJudge：超时转成 timedOut=true 的返回，而不是抛异常");
+
+  // v14.2（外部评审）：**忽略 abort 的流**也必须在墙钟上限内返回（旧实现会一直等下去）
+  const deaf = {
+    stream: () =>
+      (async function* () {
+        await new Promise(() => {}); // 永不结束、也不理 signal
+      })(),
+  };
+  const t0 = Date.now();
+  const r3 = await runJudge({ llm: deaf, route: { provider: "p", model: "m" }, system: "s", prompt: "p", timeoutMs: 120 });
+  assert.equal(r3.timedOut, true);
+  assert.ok(Date.now() - t0 < 2000, "忽略 abort 的流也必须按时返回");
+  pass += 1;
+  console.log("  ok   runJudge：忽略 abort 的流也按时返回 timedOut=true（v14.2 的 Promise.race）");
 })();
 
 await Promise.all([streamTests, judgeTests]);
