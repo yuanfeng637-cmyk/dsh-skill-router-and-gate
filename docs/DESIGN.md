@@ -670,3 +670,23 @@ fixtures 是数组：`[{"id":"c01","query":"你确定吗","expect":["claim-check
 **测试**：新增 6 个用例（搜索\|解析 ×3、`&`/`&&` ×2、引号纯搜索 ×3、全幻觉/空数组 ×2、忽略 abort 的流 ×1）。
 **版本**：`VERSION = 15`、`package.json` 0.1.1。
 **本轮未做**：`/skill-gate status` 的输出仍是中文（面向国际用户的下一个候选改动）。
+
+---
+
+## v14.3（2026-10-08）：第二轮复查的三条
+
+第二轮复查指出（我逐条核过，**全对**）：
+
+1. **目录仍是全局**（v14.2 只分桶了"已加载/拦截计数"）：`knownSkills` 是一份 Set，而每个会话的 pre-step
+   都用自己那份 snapshot 覆盖它 ⇒ 交错会话互相影响（A 被误拦 / A 被误放）。DSH 的目录确实按
+   `scope: agent` + cwd 给不同结果 ⇒ **目录必须按会话**。
+2. **新状态无上限/无清理**：每次工具调用都会为会话建状态项 ⇒ 长期累积。现在三类状态统一进
+   `lib/sessionstate.js`，带 **LRU 上限**（沿用 `ledgerMaxSessions`，默认 64）并在 **`agent/disposed`** 时 `drop()`。
+3. **登记早于 `next()`**：`tools/post-execute` 是 waterfall，后面的监听器仍可 `block`
+   （活契约 `PostToolDecision` 确有 `block` 分支）⇒ 现在改成 **`await next()` 之后**、
+   且 `decision.kind === "accept"` 且 `result.isError === false` 才登记。
+
+**可测性**：状态容器抽成不依赖 DSH/Cordis 的纯模块 ⇒ 新增 `_test/sessionstate.test.mjs`（8 个用例），
+直接覆盖"两会话交错目录""按会话隔离""LRU 上限""drop""markLoaded 语义"。
+**仍未被自动化覆盖**：`apply()` 的整体接线（多会话 + 失败加载的端到端），需要真宿主或更完整的 ctx 桩。
+**版本**：`VERSION = 16`、`package.json` 0.1.2。

@@ -85,8 +85,10 @@ Environment variables. Defaults in brackets; only the short handle is used.
   because a sub-session would re-enter `agent/pre-step`.
 - **The gate** lives on `tools/pre-execute`: it matches command text that parses a managed format by tool position
   and requires the matching skill to have been loaded; otherwise it returns `deny` with an actionable message.
-  Loaded state is tracked **per session (agent)**, and a skill counts as loaded only after the `skill` tool call
-  **succeeded** — a failed load does not unlock the gate.
+  Loaded state **and the catalog snapshot** are tracked **per session (agent)** — different sessions can see
+  different skill roots, so one session's catalog never decides another session's gate. A skill counts as loaded
+  only after the `skill` tool call **succeeded and was accepted**; a failed (or later blocked) load does not unlock
+  the gate. Per-session state is LRU-capped and dropped when the session ends.
 - **Trace ledger**: `~/.dsh/skill-gate-trace.ndjson`, one JSON line per decision (routing, fallback, deny, skip).
 
 ## Troubleshooting
