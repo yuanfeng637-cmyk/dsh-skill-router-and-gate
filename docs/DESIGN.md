@@ -690,3 +690,27 @@ fixtures 是数组：`[{"id":"c01","query":"你确定吗","expect":["claim-check
 直接覆盖"两会话交错目录""按会话隔离""LRU 上限""drop""markLoaded 语义"。
 **仍未被自动化覆盖**：`apply()` 的整体接线（多会话 + 失败加载的端到端），需要真宿主或更完整的 ctx 桩。
 **版本**：`VERSION = 16`、`package.json` 0.1.2。
+
+---
+
+## v14.4（2026-10-08）：账本补 `gateLoaded` + 补上 `apply()` 级测试
+
+1. **账本可观测性**：`gate-deny` / `gate-<action>` / `gate-error` 三类行现在都带
+   `session`（会话前 12 字符）与 **`gateLoaded`（闸门**当时**认为已加载的技能名）**。
+   动机：账本原有的 `loaded` 字段来自**账本**（扫渲染出的 `<skill_content name=…>`），
+   与闸门的按会话状态是两套东西 ⇒ 事后看不出闸门当时判断了什么。
+   只记技能名，不含任何用户内容。
+2. **`_test/applygate.test.mjs`（新，4 个用例）**：用最小假 ctx 真正驱动 `apply()` 注册的三个 waterfall
+   （`agent/pre-step`、`tools/post-execute`、`tools/pre-execute`）＋ `agent/disposed`，账本指向临时文件。
+   覆盖第二轮复查点出的缺口：**目录按会话**（A 有 ⇒ 拒 / B 没有 ⇒ 兜底① 放行）、
+   **失败加载不解锁**、**解锁后放行**、**`gateLoaded` 字段**、**disposed 后状态清空**。
+   仍未覆盖：真实宿主下的多链并发与 `ctx.skills` 真快照（那需要真 DSH）。
+**版本**：`VERSION = 17`、`package.json` 0.1.3。
+
+### 附：写 apply() 级测试时发现的一处文案/语义不一致（2026-10-08，已改文案）
+
+`/skill-gate status` 原来在目录未就绪时写 **"degraded：未就绪（此期间闸不拦）"**，
+但实现路径是：目录为空 ⇒ 传给闸的 `known = null` ⇒ skillgate.js 的**兜底①（技能不在目录 ⇒ 放行）不适用**
+⇒ **仍然拦**（拦满 `maxDeny` 次才放行）。两者矛盾，已把文案改成与实现一致：
+"未就绪：目录未建立时不享受兜底①，闸仍会拦（拦满上限即放行）"。
+（是否要改成"目录未知就整体 fail-open"是另一个设计选择，未改；现行为 fail-closed 且有上限兜底。）

@@ -136,3 +136,14 @@ MIT — see [LICENSE](LICENSE).
 改了代码没生效 → 插件不热重载，**重启 DSH**；用 `file:` 安装的还要先把改动拷进 profile。
 
 **设计取舍、阈值依据与全部实测记录**（中文）：见 [`docs/DESIGN.md`](docs/DESIGN.md)。
+
+## Development
+
+```sh
+npm test     # node --test, with a stub for @deepseek-ai/dsh-llm (that package only exists inside the host)
+npm run check
+```
+
+The test suite runs **outside** DSH: `_test/resolve-stub.mjs` redirects `@deepseek-ai/dsh-llm`
+(a host-only package) to a minimal stub in `_test/stubs/`, so the apply-level gate tests can run in any checkout.
+Plugins loaded by the host still use the real package. Run the suite from a checkout, not from an installed profile copy.
