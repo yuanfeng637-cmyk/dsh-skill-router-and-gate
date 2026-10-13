@@ -19,6 +19,8 @@ import { join } from "node:path";
 const dir = mkdtempSync(join(tmpdir(), "skillgate-apply-"));
 const traceFile = join(dir, "trace.ndjson");
 process.env.DSH_SKILL_GATE_TRACE = traceFile;
+process.env.DSH_SKILL_GATE_COMPLIANCE_TRACE = join(dir, "compliance.ndjson");
+delete process.env.DSH_SKILL_GATE_POLICY;
 
 // 没带 --import（例如直接 `node --test`）时，`@deepseek-ai/dsh-llm` 解析不到 ⇒ 优雅跳过而不是整套失败
 let apply = null;
@@ -164,6 +166,31 @@ T("apply()：目录未知时仍然拦（钉住真实行为；status 文案已按
   const r = await h.preExecute(cmd("sess-NOCAT", XLSX)); // 故意不跑 pre-step ⇒ 无目录快照
   assert.equal(r.kind, "deny", "没有目录快照时不享受兜底① ⇒ 仍拦（拦满 maxDeny 即放行）（" + why(r) + "）");
   assert.match(String(r.reason), /office-xlsx/);
+});
+
+T("apply()：成功加载同步路由账本，空工具步 loaded 也不再丢失", async () => {
+  const h = harness();
+  await h.postExecute(skillExec("sess-SYNC", "bioinformatics-toolkit"), { isError: false });
+  const blocked = await h.preExecute(cmd("sess-SYNC", "mafft --auto x.fa"));
+  assert.equal(blocked.kind, "deny"); assert.match(blocked.reason, /--help/);
+  await h.preStep(agentOf("sess-SYNC"), "");
+  await sleep(80);
+  const rows = readFileSync(traceFile, "utf8").trim().split("\n").map(JSON.parse);
+  assert.ok(rows.some((r) => r.session === "sess-SYNC" && r.stage === "skill-loaded"));
+  assert.ok(rows.some((r) => r.session === "sess-SYNC" && r.stage === "empty-query"
+    && r.loaded.includes("bioinformatics-toolkit")));
+});
+
+T("apply()：下游 pre 拒绝帮助调用后清 pending；帮助成功后生信闸解锁", async () => {
+  const h = harness(); let denyHelp = true;
+  h.register("tools/pre-execute", async () => denyHelp ? { kind: "deny", reason: "downstream" } : { kind: "allow" });
+  const help = cmd("sess-HELP", "mafft --help");
+  await h.postExecute(skillExec("sess-HELP", "bioinformatics-toolkit"), { isError: false });
+  assert.equal((await h.preExecute(help)).kind, "deny");
+  denyHelp = false;
+  assert.equal((await h.preExecute(help)).kind, "allow");
+  await h.postExecute(help, { isError: false, content: [{ type: "text", text: "Usage: mafft --auto input.fa" }] });
+  assert.equal((await h.preExecute(cmd("sess-HELP", "mafft --auto x.fa"))).kind, "allow");
 });
 
 

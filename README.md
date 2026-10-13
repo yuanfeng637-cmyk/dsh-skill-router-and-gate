@@ -1,14 +1,40 @@
 # dsh-skill-router-and-gate
 
-**Two-layer skill control for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): a per-turn shortlist, and a hard gate that makes it stick.**
+**Three-layer skill control for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): a per-turn shortlist, a hard gate that makes it stick, and an opt-in policy that binds the exact managed commands.**
 
 | Layer | What it does |
 |---|---|
 | **Router** | On every turn, one in-process LLM judge reads the live skill catalog and injects a ranked shortlist of the skills the task actually needs. A 9-way lexical scorer takes over if the judge times out, errors, or returns invalid output. |
 | **Gate** | If a tool call needs a managed format (**xlsx / docx / pptx / pdf / csv-tsv**) and the matching skill was never loaded in this session, the call is **denied** — with an instruction to load the skill and re-send the same command. |
+| **Policy** (opt-in) | With `DSH_SKILL_GATE_POLICY` pointing at a project-owned JSON file, managed commands are **registered by exact text**, bound to input/script hashes, and require same-session successful evidence within a 30-minute TTL. No LLM interpretation of prose: the policy is data, and the trace ledger records every decision. |
 
 **Name vs. short handle.** The package and repository are `dsh-skill-router-and-gate`; the **slash command and
 environment variables use the short handle `skill-gate`** (`/skill-gate`, `DSH_SKILL_GATE_*`). Same plugin.
+
+## v0.2.0：可机检的依从约束（合规策略层）
+
+加载成功现在写 `skill-loaded`，并同步路由账本的 `loaded`。它证明加载，不能证明技能全部得到遵守。
+加载 `bioinformatics-toolkit` 后，首次直接执行裸命令 `mafft` / `iqtree` / `iqtree2` / `iqtree3`
+前，须有同会话先前成功、被接受的独立 `--help` / `-h` 输出；有效期 30 分钟。
+独立版本查询放行，但不计帮助证据。路径调用、复合 shell、SSH、脚本内部调用不在这个默认规则的覆盖面。
+
+项目特有约束通过 `DSH_SKILL_GATE_POLICY=<策略 JSON 的绝对路径>` 显式开启；未设置时不猜项目标准。
+完整策略格式和例子见 [设计记录末节](docs/DESIGN.md)。策略用 `protect` 字符串命中受管命令，
+用 `actions[].command` 固定完整命令；用输入/脚本/引用 SHA256、用户裁定原文和来源 SHA256、
+先前验证命令及实际输出片段建立前置条件。达到任一阈值（wall ≥300 秒 / CPU ≥1,800 秒 /
+输出 ≥100 MiB / 请求 ≥100 次）须声明假设、至少一项已成功的便宜验证及中止条件。
+四项是显式估计，不是插件对任意进程的预测或资源配额。
+
+审计默认写 `~/.dsh/skill-gate-compliance.ndjson`，可用 `DSH_SKILL_GATE_COMPLIANCE_TRACE` 改路径。
+前置审计写入失败就拒绝受管动作；结果审计失败不改变已执行事实，也不会解锁后续验证。
+回执含实际文本片段、输入/脚本来源、输出文件 SHA256、生成时间与插件版本。
+输出文件未更新或不存在时 `receiptComplete=false`；旧脚本/引用来源缺标注或超过24小时会记告警。
+没有回复发布闸，因此日志不能保证模型在最终回复展示证据或禁止它说“完成”。
+后台、远端、普通工具文本中的退出码，以及自然语言规则的科学含义仍需要执行端或人工核验。
+
+策略应由用户审核和保管；插件不提供防止 agent 改写策略的安全隔离。错误/缺失的已配置策略会拒绝 shell 工具，
+可通过 `/skill-gate off` 恢复；总开关及文件 kill switch 现在对全部执行闸生效。
+新增依从闸没有“拒绝三次后放行”的退路；原格式加载闸仍保留原有 `skillGateMaxDeny` 行为。
 
 ## Why this exists
 
@@ -73,6 +99,8 @@ Environment variables. Defaults in brackets; only the short handle is used.
 | `DSH_SKILL_GATE_SKILL_GATE` | `true` | enable the hard gate |
 | `DSH_SKILL_GATE_SKILL_GATE_MAX_DENY` | `3` | after N refusals for the same skill, allow the call (anti-deadlock) |
 | `DSH_SKILL_GATE_TRACE` | *(on)* | set `0` to stop writing the trace ledger |
+| `DSH_SKILL_GATE_POLICY` | *(unset)* | **absolute path** to the project-owned compliance policy JSON; unset ⇒ no project standard is guessed |
+| `DSH_SKILL_GATE_COMPLIANCE_TRACE` | `~/.dsh/skill-gate-compliance.ndjson` | where the compliance audit (evidence, receipts, denials) is appended |
 
 ## How it works
 
@@ -100,6 +128,9 @@ Environment variables. Defaults in brackets; only the short handle is used.
 | The gate refuses the same thing repeatedly | after `MAX_DENY` (default 3) refusals for one skill the call is allowed through — check the trace ledger to see why the load never landed |
 | Code edits seem to have no effect | plugin code is not hot-reloaded: restart DSH. If you installed from a `file:` path, re-copy the changed files into the profile first |
 | Judge never decides | check `DSH_SKILL_GATE_JUDGE_TIMEOUT_MS` / `..._MAX_TOKENS`; on failure the lexical fallback decides and the trace records `judge-*` |
+| A registered command is refused with *"managed action is not bound to an exact command"* | the command text is not byte-identical to what the policy registered (or the policy was edited); re-send it **exactly**, or update the policy and `make_policy`-style regenerate it |
+| A registered command is refused with *"missing same-session, same-policy, same-input prior evidence"* | the required earlier step did not run **in this session under the current policy digest**, expired (30-minute TTL), or one of the hash-pinned inputs changed on disk — re-run the prerequisite, or re-pin the inputs after the file legitimately changes |
+| Policy JSON is broken or missing | shell tools are denied; fix the file, or use `/skill-gate off` to recover |
 
 ## Disable / uninstall
 
@@ -118,10 +149,13 @@ MIT — see [LICENSE](LICENSE).
 
 ## 中文速览
 
-**做什么**：给 DSH 补两层技能控制 ——
+**做什么**：给 DSH 补三层技能控制 ——
 ① **候选**：每轮由一次独立模型判定，读实时技能目录，注入排好序的候选（判定失败则退回 9 路词法打分）；
 ② **硬闸**：工具调用要解析受管格式（xlsx / docx / pptx / pdf / csv-tsv）而对应技能**本会话从未加载**时，
-直接 **deny**，并告诉你先加载哪个技能。
+直接 **deny**，并告诉你先加载哪个技能；
+③ **合规策略（可选）**：设 `DSH_SKILL_GATE_POLICY=<策略 JSON 绝对路径>` 后，受管命令按**精确命令文本**登记、
+按**输入/脚本哈希**绑定，并要求**同会话、同策略摘要、同输入**的先前成功证据（有效期 30 分钟）。
+策略是数据、不做自然语言解释；每次判定都写审计账本。
 
 **装**：`dsh plugin --profile <配置名> add "file:<本目录绝对路径>"` → **重启 DSH**（插件代码不热重载）。
 

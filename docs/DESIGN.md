@@ -714,3 +714,147 @@ fixtures 是数组：`[{"id":"c01","query":"你确定吗","expect":["claim-check
 ⇒ **仍然拦**（拦满 `maxDeny` 次才放行）。两者矛盾，已把文案改成与实现一致：
 "未就绪：目录未建立时不享受兜底①，闸仍会拦（拦满上限即放行）"。
 （是否要改成"目录未知就整体 fail-open"是另一个设计选择，未改；现行为 fail-closed 且有上限兜底。）
+
+---
+
+## v18 (2026-10-12)：从加载登记推进到可机检依从
+
+已修改源码，package 0.1.4 / VERSION=18。没有执行 refresh.ps1、重启、安装、提交、发布；
+没有改项目 MEMORY、数据或活账本。本节不重复“版本与重启”节。
+
+### 证据与现状
+
+读了本文件、index/skillgate/judge/sessionstate、指定四份测试、真实 trace 与项目 MEMORY。
+用户提供的 06:35 截止快照为1,290行；此次读取已增长至2026-10-12T08:37:36.925Z，
+共1,330行：empty-query 1028 / none 199 / injected 50 / catalog-fallback 26 / apply 16 / gate-deny 11；
+loaded 非空仍0。**gateLoaded 并非全空**：10-11T13:55 的pdf拒绝记录已有 bioinformatics-toolkit
+等八个已加载技能。所以 loaded=[] 说明两套状态未同步，不能推出完全未加载，也不是依从率统计。
+此前没有可核查的依从证据。
+
+原技能闸检查五类格式调用文本与加载集合，保留技能缺失 skip、三次 giveup、异常放行。
+删除闸只管递归删除及保护区/配置引用；不检查科学定义、普通写入、脚本逻辑、成本或结果交付。
+实际钩子是 agent/pre-step（本步 claimed 消息，可追加消息）、tools/pre-execute（dispatch前拒绝）、
+tools/post-execute（工具结果和下游accept/block）、agent/disposed（清理）。后置登记必须在
+await next()后；post不能撤销已经执行的动作。本插件没有已验证的最终回复提交/拒绝钩子，
+不控制进程内部及远端调度。此次只沿用这些已用接口，没有编造新事件。
+
+### 改动、触发、判定、落盘及代价（按收益/代价，七条）
+
+1. **index.js/apply 的 post-execute、pre-step、disposed：同步加载证据。**
+   下游accept且isError=false的skill结果才登记，同时并入ledger并写原trace的skill-loaded。
+   工具空步也从gate读取loaded；disposed清两套状态及发布记录。代价是加载时一条小日志，
+   消除“加载过却loaded永远为空”的误判；不把加载当作遵守。
+
+2. **compliance.js/bioCommand、pre、post：帮助读取断言。**
+   仅在已加载bioinformatics-toolkit的会话中，直接裸名MAFFT/IQ-TREE计算命令要求先前独立
+   --help/-h成功输出。accept、isError=false、非空，且含Usage:/Options:或--参数形式才计证据；
+   同会话30分钟TTL，版本查询不算帮助，同调用后追加帮助不能解锁。落盘独立审计。
+   代价是一条帮助调用和到期重读；“不确定”不可观察，所以保守检查首次使用。
+   熟悉工具仍须重读、非零帮助退出/特殊输出可能误拦；路径、SSH、复合shell、脚本内部明确漏检。
+
+3. **compliance.js/validatePolicy、pre、post：枚举断言和绑定。**
+   显式策略protect区分大小写子串触发，触发后完整command必须等于登记action。
+   assertions指定先前完整command及真实outputIncludes；同工具名、会话、策略SHA256、
+   输入/脚本/引用SHA256、30分钟TTL全部成立才放行。验证期间输入变了不登记。
+   可配置打印列名、绝对删除清单、小样本解析等，动作里注释“检查过”不能替代先前输出。
+   落盘compliance-preflight/result/deny；新闸不在多次拒绝后降级。缺agent.id不共享匿名证据。
+   代价是精确命令配置和线性哈希I/O；action最多64文件/64断言/16裁定，策略最多128动作/触发串，
+   1MiB字符；会话LRU64，pending/evidence各128，disposed清理。脚本能打印伪OK，输出存在不能
+   证明科学正确，也不能防蓄意伪造。策略未设置时不自动推断项目约束。
+
+4. **compliance.js/validatePolicy、pre：昂贵动作前置条件。**
+   estimates显式四项中任一wallSeconds≥300、cpuSeconds≥1800、outputBytes≥104857600、
+   networkRequests≥100，须hypothesis、至少一个已成功便宜验证、abortWhen及固定输入SHA256。
+   未知/缺字段拒，执行前await落盘假设/预算/中止条件，审计失败就拒。
+   代价是计划和样本检查；阈值为保守初值，未校准，填低估计会漏检。不从任意shell或timeout猜成本。
+   abortWhen仅留证，插件不自动监测/杀进程；没有通用实际CPU/网络请求观察接口。--thread不是CPU配额。
+
+5. **compliance.js/pre：裁定原文与参数冻结。**
+   rulings含用户原文quote、来源path、文件SHA256、审核后的required参数片段。来源变、原话不在
+   文件、片段不符或完整command变了均拒。MEMORY同时含>12000和>12200错误叙述，不能自动取
+   “最后一个数字”；需人确认quote→参数映射，例如--threads 16、--max-length 12000。
+   落盘策略摘要与拒绝原因，不改MEMORY。代价是MEMORY任意变化也须重审哈希、等价命令改写也被拒。
+   required是字串检查，不是shell AST或科学语义；完整command必须审核，包含16不证明脚本实际用16。
+
+6. **compliance.js/pre、post：旧来源及结果回执。**
+   输入/脚本/引用须固定SHA256；script/reference缺version/generatedAt/合法inputs[{path,sha256}]，
+   或生成时间超过24小时/在未来，写warnings。哈希吻合不能证明旧脚本无bug。
+   后置回执含插件版本、生成时间、来源SHA、原始文本前2048字符、保留文本SHA、实际输出文件SHA/bytes。
+   文本只保留前65536字符，哈希范围明标，不冒充全stdout哈希。文件流式哈希前后stat检测变化；
+   产物不存在、期间来源变动、输出size和mtime均未更新时receiptComplete=false。
+   Script/Process running通知不作完成证据；远端/后台须另做实际完成验证。审计失败保留已执行事实，
+   不登记后续解锁，原trace写compliance-audit-error。落盘~/.dsh/skill-gate-compliance.ndjson，
+   DSH_SKILL_GATE_COMPLIANCE_TRACE可改路径。代价是各阶段顺序读受管文件，219MB对应线性磁盘I/O，
+   不扫全目录。并发外部写入、哈希间隙、已存在bug仍是边界。回执只在日志，不能禁止最终回复说“完成”，
+   不能保证回复贴出证据，也不能保证tmux窗口真的可见；需执行端核验或回复发布接口。
+
+7. **index.js/pre-execute、package、测试与说明：接线与恢复。**
+   总开关和文件kill switch现在对全部执行闸生效；格式专用开关只关原加载闸。
+   下游pre拒绝/抛异常则取消pending，相同命令并发拒；后置只消费一次。
+   旧加载闸maxDeny保留，新依从闸不三次给过。错误/缺失的已配置策略会拒shell工具，
+   可修配置或/skill-gate off恢复；skill/read/write不受新模块拦。
+   代价是配置错时需显式恢复。新增compliance.test.mjs及applygate接线回归，judge等原逻辑保留。
+
+### 策略例子与使用范围
+
+默认仅新增第2条窄帮助断言。昂贵计划、列名/删除清单、口径、旧脚本/产物回执均须
+DSH_SKILL_GATE_POLICY指向**用户审核的绝对路径JSON**。技能目录/正文没有机器断言规范，
+故不自动把全文“必须”变成闸。下面是格式例子，**未部署**；REPLACE_*故意无效，要填真实SHA256。
+validate-sample.py应独立验证IUPAC、是否插GN前缀、长度、列名，不能只打印OK；本插件不能背书坏验证脚本。
+
+```json
+{
+  "version": 1,
+  "protect": ["run-analysis.py"],
+  "actions": [{
+    "command": "python run-analysis.py --threads 16 --max-length 12000",
+    "files": [
+      {"path": "data/input.fasta", "role": "input", "sha256": "REPLACE_INPUT_SHA256"},
+      {"path": "run-analysis.py", "role": "script", "sha256": "REPLACE_SCRIPT_SHA256",
+       "version": "reviewed-v2", "generatedAt": "2026-10-12T08:00:00Z",
+       "inputs": [{"path": "data/input.fasta", "sha256": "REPLACE_INPUT_SHA256"}]},
+      {"path": "data/aligned.fasta", "role": "output"}
+    ],
+    "rulings": [{
+      "path": "MEMORY.md",
+      "sha256": "REPLACE_MEMORY_SHA256",
+      "quote": "对齐和建树都使用16线程自动探索",
+      "required": ["--threads 16"]
+    }],
+    "estimates": {"wallSeconds": 600, "cpuSeconds": 9600, "outputBytes": 219148165, "networkRequests": 0},
+    "hypothesis": "样本保留简并码且无GN前缀；长度使用审核过的12000口径",
+    "abortWhen": "样本长度或字符检查不符即停止；实跑超预算由执行端停止",
+    "assertions": [{"command": "python validate-sample.py", "outputIncludes": "IUPAC=OK; prefix=OK; columns=id,length"}]
+  }]
+}
+```
+
+12000口径另配真实用户裁定rulings，不能把hypothesis当用户原话。
+管MAFFT/IQ-TREE/SSH包装/旧脚本，在protect放审核过的触发串并登记完整action。
+独立帮助/version即使命中protect也放行，防解锁死锁。列名用实际字段行；删除清单每条目标路径
+设独立断言，完整删除command固定LiteralPath。变量化目标和任意shell语法不新增猜测拦截。
+能修改策略/环境变量的agent可以弱化保护，故策略不是安全隔离边界，需要用户审核及外部保护；
+本次没有改权限、创建真实项目策略、运行科研任务或修改MEMORY。
+
+### 不可行、误伤及尚未完成
+
+不加逐次LLM“是否遵守”裁判：看不到内部动作，不产生帮助/文件证据，却增加延迟/token；
+不把加载、注释含--help、自称验证通过当依从。不从MEMORY最后数字抽标准，不从技能全文抽硬闸，
+不把所有Python/长timeout/扩展名当昂贵动作，不全目录扫旧文件，不自动杀远端进程。
+这些会误伤查询、写文档、小任务及其他用户进程；没有可靠契约。post block不算回滚。
+
+**误拦率未测，不能报百分比。** 单测负例和预期拒绝不是生产金标。默认窄规则开销小但覆盖窄；
+显式策略成本为维护和哈希I/O，protect子串可能误伤示例文本，大小写/别名/脚本隐藏可能漏检。
+五类失败的覆盖为帮助前置、显式昂贵计划、脚本哈希+独立样本检查、命令/裁定冻结、结果日志回执；
+科学语义、最终回复保证、远端真实完成/CPU/请求计数、自动中止都未实现，不声称“完全依从”。
+普通工具文本中退出码/后台通知的所有变体没有通用结构保证：isError=false只是工具服务成功标志，
+不能替任意脚本或远端进程的实际退出状态背书。
+
+### 本机验证与交付
+
+按仓库方式node --test --import ./_test/resolve-stub.mjs，避免无stub时跳过apply()。
+首轮63个Node测试通过、0失败/跳过，judge内部21项也全通过。
+最终65个Node测试通过、0失败/取消/跳过，judge内部21项全通过；五个lib文件语法检查及git diff --check通过。
+最终输出及全部unified diff保存为docs/compliance-v18-test.log、docs/compliance-v18.patch。
+测试审计仅写OS临时目录，没有写活账本。离线验证不能替代用户刷新后真实DSH验证，尤其是
+不同工具失败/后台结果、远端文件可见性、command原文及agent.id连续性；本次按授权留给用户手动部署。
