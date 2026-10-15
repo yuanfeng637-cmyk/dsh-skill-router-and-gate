@@ -143,6 +143,11 @@ test("R7 shell 写入登记：重定向/Out-File 写项目内未登记路径拦�
   assert.equal(await g.pre(exec("pwsh", { command: "Get-Date > analysis_set/ok.tsv" }), "s", ctxOf()), null);
   assert.equal(await g.pre(exec("pwsh", { command: "Get-Date > tmp/x.txt" }), "s", ctxOf()), null);
   assert.equal(await g.pre(exec("pwsh", { command: "Get-Date > /tmp/outside.txt" }), "s", ctxOf()), null);
+  // 自查实测的误拦场景：引号内的 `>` 不是真写入（远程命令整个包在单引号里）
+  assert.equal(await g.pre(exec("pwsh", { command: "Write-Output 'Get-Date > chikv1011/FOO.md'" }), "s", ctxOf()), null);
+  assert.equal(await g.pre(exec("pwsh", { command: "ssh host 'cd x; iqtree3 -s a.fa -T 32 > log/x.log 2>&1'" }), "s", ctxOf()), null);
+  // 但显式标志即便带引号也要查
+  assert.equal((await g.pre(exec("pwsh", { command: "Out-File -FilePath 'chikv1011/OTHER.md' -InputObject x" }), "s", ctxOf()))?.kind, "deny");
 });
 
 test("R8 候选处置：未处置即拦；加载后放行；枚举理由豁免可放行；谎报 not_installed 拦", async () => {
