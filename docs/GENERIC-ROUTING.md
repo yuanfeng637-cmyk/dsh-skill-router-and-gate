@@ -1,105 +1,138 @@
-# v25: generic local skill and resource routing
+# v26: fielded IDF routing and executable reading prerequisites
 
-The local index runs independently of the model judge and the retained v24 writing
-fallback. There is no new task/format-to-skill or output-to-reference path table.
+This index is offline and deterministic. It has no task-to-skill, format-to-skill,
+or artifact-to-reference destination table. The host snapshot remains authoritative
+for candidate eligibility. Existing model/writing routing and R1–R9 stay in place.
 
-## Discovery and ranking
+## Discovery and language normalization
 
-Each user-message routing step indexes every model-invocable skill in the scoped
-DSH snapshot, including already loaded skills. The snapshot's `path` and directory
-`resourceBase` are authoritative, including bundled office providers. Legacy entries
-without paths use user skill roots. An inaccessible explicit path never falls back
-to a same-named global skill. No network discovery or dependency installation occurs.
+Both catalog modes read SKILL.md. Catalog description/whenToUse take precedence;
+missing fields are recovered from YAML frontmatter (plain, quoted, folded, literal
+text only; no YAML execution). Explicit paths/resourceBase are authoritative and
+never fall back to a same-named global skill. Name-only entries use user skill
+roots and installed DSH provider assets. Provider roots are discovered from the
+local pnpm dsh-skill provider packages, without adding any names to the snapshot.
+Caller-supplied roots replace this discovery, allowing isolated fixture tests.
 
-Fields: name/directory, catalog description and whenToUse, metadata, full SKILL.md
-(including trigger sections), and every regular file recursively under references,
-scripts and assets. Child filenames and Markdown headings form resource labels;
-text contents also contribute. Enumeration and ties use codepoint lexical order.
-Symlink children are not followed. Binary files and files larger than 1 MiB retain
-their filename but are not decoded/indexed as text. Files are refreshed each turn.
+Resources under references/scripts/assets remain recursive, deterministic,
+refreshed each turn and limited to regular files. No symlink child traversal,
+network access, dependency installation or changes to installed skill materials.
 
-Normalization uses NFKC and lowercase. English word tokens and Chinese character
-bigrams are deduplicated; general function words are removed (Intl segmentation
-before Chinese stopword removal). Overlap is matched query tokens / query tokens.
-No task names or output format aliases are encoded in the tokenizer.
+NFKC and lowercase precede tokenization. English plurals lose a final s (length >4,
+excluding ss); Chinese uses Intl word segmentation and within-word bigrams, never
+bigrams fabricated by joining unrelated words after stopword removal. Function
+words are removed. A small explicit bilingual lexical vocabulary is applied
+symmetrically to queries and all indexed fields. It contains word equivalences,
+including legend/图注, material method/材料方法 and phylogenetic/系统发育, plus
+common research, document, data and software words. Authoring verbs share an
+authoring token and reading verbs share a reading token. It contains no skill
+identifiers, destination paths, query predicates or preferred candidates. This
+lexicon is auditable in resourceindex.js; it is not an unrestricted translator.
+Previously Chinese-only requests had no lexical bridge to English-only legends.
+Adding multilingual skill metadata remains preferable for vocabulary not covered.
 
-Resource score = max(filename/title overlap, 0.7 * content overlap).
-Skill score = max(name overlap, 0.85 * catalog/heading overlap,
-0.65 * SKILL.md overlap, 0.9 * best resource score).
-Scores are retrieval scores, not calibrated probabilities. Top N above minScore
-are injected even if the judge returns none or times out, or repeated recommendations
-would otherwise be suppressed. Existing model/writing candidates remain additive
-so their R8 obligations are preserved.
+## Exact scoring rule
 
-The injection enumerates all discovered child paths. A reference above
-resourceMinScore is marked READ FIRST with score, matched tokens and the evidence
-field (filename/title or content). Other resources remain listed as available.
-Every reference of a relevant skill can also become required when an output matches
-its contents; loading the skill alone is not complete-read evidence.
+Let N be the eligible skill count. df(t) counts skills containing t anywhere in
+name, declaration, body or child resources, at most once per skill, irrespective
+of the number of children or repeated occurrences.
 
-## Output association and enforcement
-
-The session stores the current routing result separately from R8 picks. Clearing or
-waiving R8 does not clear references. New user tasks replace the routing map; generic
-task turns reset read evidence even when the relevant skill is already loaded.
-Session cleanup and bounded LRU storage include the new route state.
-
-For each direct write/create_file/edit target, R7-recognizable shell write target,
-or exact registered action output, R4 examines references belonging to relevant
-skills (including model-only candidates). A reference matches when its contents
-contain the target's extension token, or its label/content overlaps the target
-basename plus proposed Markdown headings above artifactMinScore. Thus `## Methods`
-can associate with `METHODS.md` and `figure legend` with `figure_legend.md`, regardless
-of the skill/reference name. The reference's own `.md` suffix is not an output type.
-Both routed content and current contents are considered, preventing a subsequent edit
-from removing an already applicable prerequisite.
-
-Matching requirements accumulate with global requireReads and existing specs[].requireReads.
-R4 uses the existing absolute-path#sha256 evidence from accepted, successful reads
-without offset/limit. Partial, failed or downstream-blocked reads do not unlock.
-Any content edit invalidates the evidence. Read errors fail open per resource;
-other R1–R9 checks continue. R1–R9 order and policy rules remain intact.
-
-## Policy parameters (schema version remains 1)
-
-```json
-{
-  "artifact": {
-    "resourceRouting": {
-      "enabled": true,
-      "minScore": 0.28,
-      "resourceMinScore": 0.22,
-      "artifactMinScore": 0.45,
-      "topN": 3
-    }
-  }
-}
+```
+idf(t) = ln(1 + (N + 0.5) / (df(t) + 0.5))
+coverage(Q,F) = sum(idf(t) for t in Q intersect F) / sum(idf(t) for t in Q)
+match(Q,F) = coverage(Q,F) / (1 + 0.12 * ln(1 + |F| / max(1,|Q|)))
 ```
 
-Omission uses these defaults (topN defaults to the router topK). No artifact section
-retains the previous opt-in gate behavior. Explicit enabled=false disables this new
-path. Existing specs[].requireReads are compatibility fallbacks; no entries were added.
+Q and F are deduplicated token sets. Unseen query words remain in the denominator.
+The length is distinct vocabulary size; copying a keyword or boilerplate does not
+increase the score. Empty query or field match gives zero.
 
-## Validation and scope
+Child score is max(match(filename/headings), 0.70 * match(content)). A reference
+at or above resourceMinScore=0.22 is READ FIRST. Scripts/assets stay discoverable.
 
-Offline tests cover Chinese/bilingual figure legend requests, office DOCX/XLSX,
-recursive references/scripts/assets, deterministic ordering and thresholds, and an
-arbitrarily named skill with Methods content. Event-chain tests exercise model none,
-R8 waiver, successful/partial/failed/blocked reads, file changes, already-loaded skills,
-new turns and task replacement. All three write aliases, direct shell writes and
-registered action outputs use the same reference enforcement.
+The field contributions and final fusion are:
 
-A read-only local smoke index found 80 skill files and 172 child resources. Real
-office-docx and office-xlsx rank first for their respective requests; real
-figure-legend-gen and figure-legend-writer expose academic_style_guide.md and
-legend_templates.md. Installed bundled office skills have no child resources, so
-none are fabricated. Fixture office skills with references verify resource gating.
+```
+D = 1.00 * match(description + whenToUse)
+N = 0.90 * match(skill name)
+H = 0.75 * match(SKILL.md headings)
+B = 0.45 * match(SKILL.md body)
+R = 0.55 * max(child scores)
+score = compatibility * (max(D,N,H,B,R) + 0.25*D + 0.75*N + 0.50*R + 0.15*B) / 2.275
+```
 
-Lexical matching requires shared vocabulary. A Chinese query cannot independently
-match an English-only skill without shared tokens or locally supplied multilingual
-trigger text. The existing model judge remains available; its selected skills now
-receive the same content-derived reference gate. This mechanism adds no translation
-table. Script-internal outputs remain outside the host's visible write targets, as
-with the existing R7 boundary. Fail-open remains intentional for unavailable inputs.
+The description has the largest base weight; name and resource corroboration
+reinforce it. The denominator bounds this retrieval score below 1. This is not a
+probability. compatibility=0.50 only when the query asks for authoring and the
+skill name/declaration explicitly contains reading but no authoring; otherwise 1.
+This suppresses a read-only table inspection skill for a table creation request,
+without naming either skill or any format.
 
-After updating, run refresh.ps1 and restart DSH to load VERSION=25.
+Admission requires score >= minScore=0.28 AND a lead over the runner-up >=
+minMargin=0.02. All candidates, including those below minScore, participate in
+the margin comparison. A tie or insufficient margin returns [] (no route).
+The accepted winner is returned; topN=3 is an upper bound, not an obligation to
+fill slots with weaker skills. rankResourceCandidates exposes the field evidence
+for diagnosis. Enumeration order cannot decide an ambiguous route.
+
+Other defaults remain enabled=true, resourceMinScore=0.22,
+artifactMinScore=0.45, topN=3. Existing project policy values need no modification;
+minMargin defaults to 0.02 when absent.
+
+## Reading enforcement and side effects
+
+Every selected skill with no selected reference gets its readable SKILL.md as
+an explicit READ FIRST prerequisite. It is a real absolute file path, passed to
+the existing R4 absolute-path#sha256 complete-read check. Its basis is shown as
+SKILL.md fallback. Since it is the selected workflow's entry point, its fallback
+requirement applies to every host-visible output during that routed turn,
+including write/edit/create_file, recognized shell writes and registered outputs.
+A skill load alone, a claimed path, a partial/failed/blocked read, or an old hash
+does not satisfy this complete-read evidence. The fallback adds stricter reads:
+an unrelated visible output in that turn may also require the entry point.
+
+Existing selected references retain their content-derived artifact association:
+output extension in the reference text, or basename/proposed headings matching
+at artifactMinScore. Current and routed contents are both considered. These
+requirements accumulate with global requireReads and ALL matching specs; no
+policy entries were replaced. Model-only/writing-only candidates also expose
+reference prerequisites, or the same SKILL.md fallback when no reference exists.
+If the scoped skill has neither readable children nor readable SKILL.md, the
+injection explicitly says “该技能无可前置阅读的资源”. It does not fabricate a path.
+Existing unavailable-file fail-open behavior and the script-internal output
+visibility boundary remain unchanged.
+
+Loaded skills are still indexed. An opted-in artifact policy re-injects their
+fresh per-turn reads; without that policy existing loaded-skill suppression is
+preserved. R8 disposition is independent from R4 reading evidence. R1–R9 order
+and assertions were not weakened.
+
+## Reproducible validation and the missing candidate
+
+The supplied original command was run before changes and reproduced all five
+reported failures. Its 79 directory entries do not contain office-xlsx. Actual
+bundled provider assets add office-docx/office-pptx/office-xlsx, making 82 entries,
+with the same 172 child resources. The full roster achieves all five expected
+routes in BOTH name-only (default provider-root discovery) and full-catalog modes.
+The original 79-entry input now abstains for XLSX instead of inventing a candidate
+outside the snapshot. It cannot return office-xlsx without that name being admitted
+by the caller. This is a catalog-completeness limitation, not a hidden test fix.
+
+Run the local smoke (read-only except --capture writes the test corpus):
+
+```
+D:\node\node.exe _test/local-routing-smoke.mjs
+D:\node\node.exe --test --import ./_test/resolve-stub.mjs
+```
+
+routing-corpus.json stores the real 82-entry corpus's deduplicated lexical features,
+resource paths relative to each skill and source SKILL.md SHA256, without source
+prose or executable code. Regression tests reconstruct isolated skill files from
+those features and exercise BOTH buildResourceIndex input modes with all distractors.
+The original figure legend/DOCX/XLSX fixture is shared unchanged. New tests also
+cover ambiguity, body boilerplate, absent candidates, no-readable-resource status,
+YAML text styles and executable/hash-invalidating SKILL.md fallback enforcement.
+
+See validation-v26-routing.txt for the exact local outputs and
+validation-v26-tests.txt for the full 95-pass/0-fail/0-skip test output.
+After refresh.ps1 and refresh.ps1 -Verify, restart DSH to load VERSION=26.

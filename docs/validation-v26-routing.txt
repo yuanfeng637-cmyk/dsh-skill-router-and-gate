@@ -1,0 +1,18 @@
+MODE=original79 技能数=79 子资源=172
+给这张图写图注 => figure-legend-gen:0.73[2]
+写材料方法 => scientific-writing:0.36[5]
+make an xlsx table of counts => 无路由
+系统发育树怎么画 => phylogenetic-tree-styler:0.78[1]
+做一次重组检测 => rdp4-recomb-mosaic:0.49[1]
+MODE=name-only 技能数=82 子资源=172
+给这张图写图注 => figure-legend-gen:0.73[2]
+写材料方法 => scientific-writing:0.36[5]
+make an xlsx table of counts => office-xlsx:0.45[1]
+系统发育树怎么画 => phylogenetic-tree-styler:0.78[1]
+做一次重组检测 => rdp4-recomb-mosaic:0.49[1]
+MODE=full-catalog 技能数=82 子资源=172
+给这张图写图注 => figure-legend-gen:0.73[2]
+写材料方法 => scientific-writing:0.36[5]
+make an xlsx table of counts => office-xlsx:0.45[1]
+系统发育树怎么画 => phylogenetic-tree-styler:0.78[1]
+做一次重组检测 => rdp4-recomb-mosaic:0.49[1]

@@ -1,6 +1,6 @@
 # dsh-skill-router-and-gate
 
-v25：新增[通用本地技能／子资源索引与路由驱动阅读门控](docs/GENERIC-ROUTING.md)。无需新增任务或产物到参考文件的手工映射；配置仅含开关与阈值。更新后运行 `refresh.ps1` 并重启 DSH。
+v26：修复[通用本地技能／子资源索引与路由驱动阅读门控](docs/GENERIC-ROUTING.md)：恢复 SKILL.md 声明字段，采用 IDF／字段长度归一化、分项权重与分差弃权，并为无匹配参考的技能增加可执行的 SKILL.md 前置阅读。新增两种 catalog 模式的全量回归；原始 79 项不含 bundled office 技能的差异见文档。更新后运行 `refresh.ps1` 并重启 DSH。
 
 **Three-layer skill control for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): a per-turn shortlist, a hard gate that makes it stick, and an opt-in policy that binds the exact managed commands.**
 

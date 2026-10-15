@@ -1,0 +1,127 @@
+✔ generic apply: judge none, full-read acceptance, R8 disposition independence, loaded skill/new turn and hash invalidation (272.5014ms)
+✔ model-only relevant skill also gets output-derived reference gating without lexical query hits (16.5043ms)
+✔ writing rule: inject skill + full reference despite judge none/unsure/error and repeated recommendations (446.6343ms)
+✔ path R4 integration: partial/failed/blocked reads never unlock; full read unlocks, content change invalidates (9.5766ms)
+✔ apply()：目录按会话 —— A 的目录有 excel ⇒ 拒；B 的目录没有 ⇒ 兜底① 放行 (18.2794ms)
+✔ apply()：只有 skill 的 post-execute「被接受且成功」才解锁 (6.6571ms)
+✔ apply()：成功但被下游监听器 block ⇒ 不解锁（登记判在 next() 之后） (6.8699ms)
+✔ apply()：账本 gate-* 行带 session + gateLoaded（v14.4 新增） (28.7157ms)
+✔ apply()：agent/disposed 清空该会话状态（连目录一起 ⇒ 回到「目录未知」） (5.4485ms)
+✔ apply()：目录未知时仍然拦（钉住真实行为；status 文案已按此更正） (0.432ms)
+✔ apply()：成功加载同步路由账本，空工具步 loaded 也不再丢失 (88.628ms)
+✔ apply()：下游 pre 拒绝帮助调用后清 pending；帮助成功后生信闸解锁 (2.1772ms)
+✔ R4 path specs: root/nested/case/Chinese matches, write/edit aliases, unrelated targets excluded (135.5697ms)
+✔ R4 path specs: global and ALL matching specs accumulate, hash-only/path-only do not count (22.0582ms)
+✔ R4 path specs: direct shell writes and registered output paths require the same reference (20.749ms)
+✔ R1 禁回收站：移动到垃圾/回收站类目录拦；彻底删除与非回收站移动放行 (5.1417ms)
+✔ R2 产物登记：新建未登记文件拦；allowNew/scratch 放行；覆盖已存在文件放行 (8.9732ms)
+✔ R3 文体声明：无 genre 行拦；允许值放行；specs 可把某路径限死到特定文体 (9.3498ms)
+✔ R4 交接前置：本轮未完整读取（内容哈希绑定）时拦；读过后放行；文件改动即失效 (14.5217ms)
+✔ R4 对照面：requireReads 指向的文件不存在 ⇒ 放行（无对象可读，不卡死） (4.078ms)
+✔ R5 参数闸：取值必须等于有效裁定；重复与引号夹带都拦；别家工具不套用 (6.6766ms)
+✔ R6 路径别名：UNC 拦；硬链接拦；符号链接/junction 拦（本机无特权时跳过该断言） (10.6381ms)
+✔ R7 shell 写入登记：重定向/Out-File 写项目内未登记路径拦；已登记与项目外放行 (16.5216ms)
+✔ R8 候选处置：未处置即拦；加载后放行；枚举理由豁免可放行；谎报 not_installed 拦 (8.4573ms)
+✔ R9 质疑强制：未加载 claim-check 拦；缺四段式拦；判定值不合法拦；通过后由闸门追加台账 (14.4992ms)
+✔ fail-open：策略缺失、无 artifact 段、非受管工具 ⇒ 一律 null (3.7333ms)
+✔ globToRe：`**/` 可匹配零层目录；`*` 不跨目录 (0.2626ms)
+✔ 默认：加载生信技能后需先前成功帮助输出；同调用追加帮助不能解锁 (9.4456ms)
+✔ 帮助语法窄匹配：搜索、字符串、版本、绝对路径与复合 shell 边界 (0.2694ms)
+✔ 首次受管动作缺前置验证即拦，成功输出才解锁 (27.4536ms)
+✔ 失败/下游 block 不提供依从证据 (17.88ms)
+✔ 同会话、TTL、输入 sha、策略摘要全部绑定 (22.2409ms)
+✔ 验证执行期间改变输入，不能登记证据 (11.8706ms)
+✔ 裁定逐字固定：来源改动、线程漂移、阈值漂移均拒 (13.9239ms)
+✔ 即使重新登记错误 command，也不能违背固定的裁定映射 (8.6266ms)
+✔ 四类估计阈值各自要求假设、验证、中止条件；缺估计拒绝 (25.6849ms)
+✔ 结果回执记录真实片段、输入和产物 SHA256；旧输出不可算本次产物 (19.4354ms)
+✔ 旧脚本/引用哈希不符硬拒；缺完整来源标注告警 (13.2121ms)
+✔ 策略损坏/不存在、审计 IO 失败均不能静默解锁；无策略不误伤普通动作 (7.2816ms)
+✔ 下游拒绝后 cancel 清 pending；重复并发拒；匿名证明拒 (13.2995ms)
+✔ 后台启动通知不能算完成或验证证据 (8.2919ms)
+✔ 多个动作共享一次验证分别绑定各自输入，不重复拼接 (14.2351ms)
+✔ 策略保护 mafft 时仍允许独立 help/version，避免把解锁路径挡死 (3.0695ms)
+✔ 带完整标注的旧引用超过24小时仍告警，来源信息写入审计 (9.242ms)
+  ok   catalogEntries 固定排序 + 截断
+  ok   prompt 构造
+  ok   parse：正常 pick
+  ok   parse：空数组 = none
+  ok   parse：unsure
+  ok   parse：代码围栏 + 前后废话
+  ok   parse：幻觉名字被丢弃（白名单）
+  ok   parse：越界置信度记 null，不编数
+  ok   parse：重复名字去重 + 截断到 maxPicks
+  ok   parse：无效输出必须 ok=false（不能被当成 none）
+  ok   parse：全是幻觉名字 ⇒ ok=false（v14.2，不能当成合法 none）
+  ok   parse：空数组仍是合法 none（v14.2 的修正不能把它也判成无效）
+  ok   collectStream：text-delta 拼接 + usage/finish
+  ok   collectStream：仅 block-end 时按 index 排序
+  ok   collectStream：推理字符单独计数；正文为空 ⇒ 判定无效（不是 none）
+  ok   tokensOf：缺 usage 记 null；缓存命中/总量一起记
+  ok   withTimeout：到点 abort 且 timedOut=true
+  ok   withTimeout：透传外层 signal（且不算超时）
+  ok   runJudge：路由/系统/温度/maxTokens/messages/signal 全部透传
+  ok   runJudge：超时转成 timedOut=true 的返回，而不是抛异常
+  ok   runJudge：忽略 abort 的流也按时返回 timedOut=true（v14.2 的 Promise.race）
+
+promptVersion = v13.1
+全部通过（21 项）
+✔ _test\judge.test.mjs (445.9137ms)
+✔ generic index: figure legends and office DOCX/XLSX route independently of writing rule, with child paths/evidence (67.8633ms)
+✔ generic R4: route-derived refs gate write/edit/create, direct shell and registered outputs; hashes invalidate (127.0711ms)
+✔ index refresh uses changed content; missing roots and unreadable files fail open (28.184ms)
+✔ content features infer Methods outputs for an arbitrary skill/reference name, without a policy path table (20.8531ms)
+✔ scoped paths never fall back to a same-named home skill; route state is bounded and independent of R8 (16.3689ms)
+✔ 82-entry real lexical corpus: all five requests route with prerequisites in name-only and full catalog modes (9308.8741ms)
+✔ original figure legend / DOCX / XLSX fixtures also support name-only discovery (333.1387ms)
+✔ generic ambiguity abstains; field length, boilerplate and identifiers cannot force a route (13.8753ms)
+✔ SKILL.md fallback really gates writes, aliases, shell and registered outputs; full read hash unlocks (129.0813ms)
+✔ catalog declaration reads quoted, plain, folded and literal text without evaluating YAML (0.8643ms)
+✔ 目录按会话：两个会话交错设置目录，各自读到自己那份（评审指出的主问题） (4.6012ms)
+✔ 已加载按会话：A 加载不影响 B（v14.2 语义在容器层保持不变） (0.5771ms)
+✔ markLoaded：清掉**本会话**的拦截计数，不动别的会话 (0.3438ms)
+✔ 读接口不产生副作用：探测读既不建条目、也不触发淘汰（v14.3 首版的 bug） (0.4601ms)
+✔ markLoaded：空名字不登记；返回布尔 (0.3037ms)
+✔ LRU 上限：超过 maxSessions 就淘汰最久未用的会话（三类状态都受限） (0.2988ms)
+✔ drop：会话结束时三类状态一起清 (0.3482ms)
+✔ sidOf：取 exec.agent.id；缺失时归到统一桶 (0.3279ms)
+✔ denySummary：全会话合计（status 展示用） (0.4949ms)
+✔ 技能名与两个技能目录一致 (1.4624ms)
+✔ 拦：xlsx 解析 (2.2074ms)
+✔ 拦：docx / pptx 解析 (0.3522ms)
+✔ 拦：PDF 解析（Python / R / CLI 三路） (0.3293ms)
+✔ 拦：表格解析（tip_name 那次事故的命令形态） (0.2549ms)
+✔ P0 拦：搜索管道**不得**放过上游解析操作（原实现是漏拦） (0.2744ms)
+✔ P0 拦：PowerShell 命令名大小写不敏感（import-csv / IMPORT-EXCEL） (0.3299ms)
+✔ P0 拦：pdftotext 的 .exe 与引号/绝对路径写法 (0.296ms)
+✔ P1 拦：R 的 require / requireNamespace / pdftools:: 变体 (0.283ms)
+✔ P1 拦：here-string 送代码进解释器、多语句、cmd /c 包装 (0.3605ms)
+✔ P1 拦：真实参数形态的六种字段名都要能取到命令 (0.2366ms)
+✔ 放行：只列 / 只搬 / 只删文件（裸扩展名不触发） (0.0973ms)
+✔ 放行：**整条语句本身就是搜索命令**（读文本 ≠ 解析受管格式） (0.2218ms)
+✔ 放行：查帮助 / 查命令本身，不是调用 (0.1224ms)
+✔ 放行：整行注释与 <# #> 块注释里的词 (0.6671ms)
+✔ 放行：散文式提及（没有代码上下文） (0.1287ms)
+✔ 放行：跑一个现成脚本（命令行里没有解析词） (0.0748ms)
+✔ 放行：skill 工具自身 / 非命令类工具 / 参数形态异常 (0.119ms)
+✔ 放行：加载过对应技能之后 (0.0662ms)
+✔ 兜底①：技能不在目录清单里 ⇒ 放行（没有东西可加载） (0.0687ms)
+✔ 兜底②：同一技能拦够 maxDeny 次 ⇒ 放行（防死循环） (0.0739ms)
+✔ 兜底③ / 开关：enabled=false ⇒ off（放行） (0.0481ms)
+✔ gateStatements：字面 \n 还原 / 注释剥离 / 只豁免纯搜索语句 (0.1035ms)
+✔ 表里每个 regex 都能编译、不匹配空串、带 i 不带 g (0.079ms)
+✔ 边界：字符串/行内注释里提到调用形式 ⇒ 会拦（代价是加载一次技能） (0.0506ms)
+✔ 边界：here-string 内容一律算命中（写文档也会被拦一次） (0.0433ms)
+✔ 边界：只看得到命令行的脚本执行 ⇒ 不拦（有意留的余地） (0.0375ms)
+✔ 拦：搜索命令 + 管道 + 解析（旧版整条豁免 = 漏拦） (0.0499ms)
+✔ 拦：搜索命令与解析用 `&` / `&&` 串联 (0.0413ms)
+✔ 放行：引号里的 `|` 仍是纯搜索（v14.1 既有豁免不能被这次修坏） (0.0484ms)
+✔ deterministic writing intent covers Chinese/English and only installed scientific-writing (2.5494ms)
+ℹ tests 95
+ℹ suites 0
+ℹ pass 95
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 10217.7587
