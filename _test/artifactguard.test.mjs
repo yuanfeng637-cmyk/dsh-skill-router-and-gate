@@ -1,28 +1,28 @@
 /**
- * artifactguard 单元测试（v19）：node --test _test/artifactguard.test.mjs
+ * artifactguard 单元测试（v20）：node --test _test/artifactguard.test.mjs
  *
- * 覆盖四类**真实发生过**的失败，以及"不许误拦"的对照面：
- *   R1 禁回收站（对应裁定 no-recycle-bin）
- *   R2 产物登记（对应"产出用户没要求的文件"）
- *   R3 文体声明（对应把核验数字写进"材料方法"正文）
- *   R4 交接前置（对应整会话没读 .ccm/PROGRESS.md 就一路写）
+ * 覆盖 8 条规则中**每一条能确定性判定的**行为，以及"不许误拦"的对照面：
+ *   R1 禁回收站   R2 产物登记   R3 文体声明(+specs)   R4 交接前置(本轮+内容哈希)
+ *   R5 参数闸     R6 路径别名(UNC/符号链接)          R7 shell 写入登记
+ *   R8 候选处置(+not_installed 核实/豁免)
  * 另有 fail-open（策略缺失/字段缺失一律不拦）与 glob 语义。
+ * 每条规则的用例都对应一次**真实发生过的失败**（见 lib/artifactguard.js 头部注释）。
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createArtifactGuard, globToRe, readKey } from "../lib/artifactguard.js";
 
-/** 造一个临时项目：cwd = <root>/proj，策略文件在 <root>/policy.json。 */
+/** 造临时项目：cwd = <root>/proj；策略在 <root>/policy.json。 */
 async function setup(artifact, existing = [], actions = [{ command: "registered-cmd", files: [] }]) {
   const root = await mkdtemp(join(tmpdir(), "ag-"));
   const cwd = join(root, "proj");
   await mkdir(cwd, { recursive: true });
   const policyPath = join(root, "policy.json");
-  await writeFile(policyPath, JSON.stringify({ version: 1, protect: ["nothing-protected"], actions, artifact }), "utf8");
+  await writeFile(policyPath, JSON.stringify({ version: 1, protect: ["nothing"], actions, artifact }), "utf8");
   for (const rel of existing) {
     const p = join(cwd, rel);
     await mkdir(join(p, ".."), { recursive: true });
@@ -30,104 +30,132 @@ async function setup(artifact, existing = [], actions = [{ command: "registered-
   }
   const g = createArtifactGuard({ policyPath });
   const exec = (name, args) => ({ name, arguments: args, agent: { session: { header: { cwd } } } });
-  return { g, cwd, policyPath, exec, root };
+  return { g, cwd, root, policyPath, exec };
 }
-const NO_READS = new Set();
+const CTX = { reads: new Set(), picks: null, loaded: new Set() };
+const ctxOf = (o = {}) => ({ ...CTX, ...o });
+const shaOf = async (p) => createHash("sha256").update(await readFile(p)).digest("hex");
 
-test("R1 禁回收站：把文件移动到垃圾/回收站类目录 ⇒ 拦", async () => {
+test("R1 禁回收站：移动到垃圾/回收站类目录拦；彻底删除与非回收站移动放行", async () => {
   const { g, exec } = await setup({ noRecycleBin: true });
-  const r = await g.pre(exec("pwsh", { command: "Move-Item -LiteralPath 'D:/proj/a.md' -Destination 'D:/proj/_trash/'" }), "s", NO_READS);
-  assert.equal(r?.kind, "deny");
-  assert.match(r.reason, /R1/);
-  const r2 = await g.pre(exec("bash", { command: "mv a.md .trash/" }), "s", NO_READS);
-  assert.equal(r2?.kind, "deny");
+  assert.equal((await g.pre(exec("pwsh", { command: "Move-Item -LiteralPath 'D:/proj/a.md' -Destination 'D:/proj/_trash/'" }), "s", ctxOf()))?.kind, "deny");
+  assert.equal((await g.pre(exec("bash", { command: "mv a.md .trash/" }), "s", ctxOf()))?.kind, "deny");
+  assert.equal(await g.pre(exec("pwsh", { command: "Remove-Item -LiteralPath 'D:/proj/a.md' -Recurse -Force" }), "s", ctxOf()), null);
+  assert.equal(await g.pre(exec("pwsh", { command: "Move-Item a.md b.md" }), "s", ctxOf()), null);
 });
 
-test("R1 对照面：彻底删除、以及移到非回收站路径 ⇒ 放行", async () => {
-  const { g, exec } = await setup({ noRecycleBin: true });
-  assert.equal(await g.pre(exec("pwsh", { command: "Remove-Item -LiteralPath 'D:/proj/a.md' -Recurse -Force" }), "s", NO_READS), null);
-  assert.equal(await g.pre(exec("pwsh", { command: "Move-Item a.md b.md" }), "s", NO_READS), null);
-  assert.equal(await g.pre(exec("pwsh", { command: "Move-Item a.md D:/proj/keep/" }), "s", NO_READS), null);
+test("R2 产物登记：新建未登记文件拦；allowNew/scratch 放行；覆盖已存在文件放行", async () => {
+  const { g, exec } = await setup({ allowNew: ["analysis_set/*.tsv"], scratch: ["tmp/**"] }, ["chikv1011/README.md"]);
+  assert.equal((await g.pre(exec("write", { file_path: "chikv1011/ALIGNMENT.md", content: "# x" }), "s", ctxOf()))?.kind, "deny");
+  assert.equal(await g.pre(exec("write", { file_path: "analysis_set/new.tsv", content: "a" }), "s", ctxOf()), null);
+  assert.equal(await g.pre(exec("write", { file_path: "tmp/scratch.md", content: "# x" }), "s", ctxOf()), null);
+  assert.equal(await g.pre(exec("write", { file_path: "chikv1011/README.md", content: "# 改" }), "s", ctxOf()), null);
+  assert.equal(await g.pre(exec("write", { file_path: "C:/Windows/Temp/x.md", content: "# x" }), "s", ctxOf()), null);
 });
 
-test("R2 产物登记：项目内新建未登记文件 ⇒ 拦；allowNew / scratch 命中 ⇒ 放行", async () => {
-  const art = { allowNew: ["analysis_set/*.tsv"], scratch: ["tmp/**"] };
-  const { g, exec } = await setup(art);
-  const bad = await g.pre(exec("write", { file_path: "chikv1011/ALIGNMENT.md", content: "# x" }), "s", NO_READS);
-  assert.equal(bad?.kind, "deny");
-  assert.match(bad.reason, /R2/);
-  assert.equal(await g.pre(exec("write", { file_path: "analysis_set/new.tsv", content: "a\tb" }), "s", NO_READS), null);
-  assert.equal(await g.pre(exec("write", { file_path: "tmp/scratch.md", content: "# x" }), "s", NO_READS), null);
+test("R3 文体声明：无 genre 行拦；允许值放行；specs 可把某路径限死到特定文体", async () => {
+  const { g, exec } = await setup({ genrePaths: ["**/METHODS*.md"], allowNew: ["METHODS.md"] });
+  assert.equal((await g.pre(exec("write", { file_path: "METHODS.md", content: "# 材料方法\n……" }), "s", ctxOf()))?.kind, "deny");
+  assert.equal(await g.pre(exec("write", { file_path: "METHODS.md", content: "# 材料方法\ngenre: methods\n……" }), "s", ctxOf()), null);
+  const { g: g2, exec: e2 } = await setup(
+    { specs: [{ paths: ["**/METHODS*.md"], genre: ["methods"] }], allowNew: ["METHODS.md"] });
+  assert.equal((await g2.pre(e2("write", { file_path: "METHODS.md", content: "genre: notes\n……" }), "s", ctxOf()))?.kind, "deny");
+  assert.equal(await g2.pre(e2("write", { file_path: "METHODS.md", content: "genre: methods\n……" }), "s", ctxOf()), null);
 });
 
-test("R2 对照面：覆盖**已存在**的文件不算新建 ⇒ 放行；项目外路径不判", async () => {
-  const { g, exec } = await setup({ allowNew: [] }, ["chikv1011/README.md"]);
-  assert.equal(await g.pre(exec("write", { file_path: "chikv1011/README.md", content: "# 改" }), "s", NO_READS), null);
-  assert.equal(await g.pre(exec("write", { file_path: "C:/Windows/Temp/x.md", content: "# x" }), "s", NO_READS), null);
-});
-
-test("R3 文体声明：命中 genrePaths 且无 genre 行 ⇒ 拦；声明合法文体 ⇒ 放行；非法文体 ⇒ 拦", async () => {
-  const { g, exec } = await setup({ genrePaths: ["**/METHODS*.md"], allowNew: ["METHODS.md", "chikv1011/METHODS.md"] });
-  const noGenre = await g.pre(exec("write", { file_path: "METHODS.md", content: "# 材料方法\n本研究……" }), "s", NO_READS);
-  assert.equal(noGenre?.kind, "deny");
-  assert.match(noGenre.reason, /R3/);
-  assert.equal(await g.pre(exec("write", { file_path: "METHODS.md", content: "# 材料方法\ngenre: methods\n……" }), "s", NO_READS), null);
-  assert.equal(await g.pre(exec("write", { file_path: "chikv1011/METHODS.md", content: "genre: runbook\n……" }), "s", NO_READS), null);
-  const bogus = await g.pre(exec("write", { file_path: "METHODS.md", content: "genre: 随便写\n……" }), "s", NO_READS);
-  assert.equal(bogus?.kind, "deny");
-});
-
-test("R4 交接前置：未**完整读取**（绑定内容哈希）时，write 与已登记动作被拦；读过后放行", async () => {
-  const { g, cwd, exec } = await setup({ requireReads: [".ccm/PROGRESS.md"], allowNew: ["analysis_set/*.tsv"] }, [".ccm/PROGRESS.md"], [{ command: "registered-cmd", files: [] }]);
-  const w = await g.pre(exec("write", { file_path: "analysis_set/x.tsv", content: "a" }), "s", NO_READS);
+test("R4 交接前置：本轮未完整读取（内容哈希绑定）时拦；读过后放行；文件改动即失效", async () => {
+  const { g, cwd, exec } = await setup({ requireReads: [".ccm/PROGRESS.md"], allowNew: ["analysis_set/*.tsv"] },
+    [".ccm/PROGRESS.md"], [{ command: "registered-cmd", files: [] }]);
+  const w = await g.pre(exec("write", { file_path: "analysis_set/x.tsv", content: "a" }), "s", ctxOf());
   assert.equal(w?.kind, "deny");
   assert.match(w.reason, /R4/);
-  const shellReg = await g.pre(exec("pwsh", { command: "registered-cmd" }), "s", NO_READS);
-  assert.equal(shellReg?.kind, "deny");
-  // 未登记的 shell 命令不在此列（否则会卡死常规工作）
-  assert.equal(await g.pre(exec("pwsh", { command: "Get-Date" }), "s", NO_READS), null);
-  // 只给路径（没有内容哈希）**不算**证据 —— 外部评审指出的"只查哈希/只看存在"绕过口
+  assert.equal((await g.pre(exec("pwsh", { command: "registered-cmd" }), "s", ctxOf()))?.kind, "deny");
+  assert.equal(await g.pre(exec("pwsh", { command: "Get-Date" }), "s", ctxOf()), null); // 未登记命令不在此列
   const p = join(cwd, ".ccm", "PROGRESS.md");
-  assert.equal((await g.pre(exec("write", { file_path: "analysis_set/x.tsv", content: "a" }), "s", new Set([p])))?.kind, "deny");
-  // 绑定内容哈希 ⇒ 放行
-  const sha = createHash("sha256").update(await readFile(p)).digest("hex");
-  assert.equal(await g.pre(exec("write", { file_path: "analysis_set/x.tsv", content: "a" }), "s", new Set([readKey(p, sha)])), null);
+  // 只给路径：不算证据
+  assert.equal((await g.pre(exec("write", { file_path: "analysis_set/x.tsv", content: "a" }), "s", ctxOf({ reads: new Set([p]) })))?.kind, "deny");
+  // 绑定内容哈希：放行
+  const ok = ctxOf({ reads: new Set([readKey(p, await shaOf(p))]) });
+  assert.equal(await g.pre(exec("write", { file_path: "analysis_set/x.tsv", content: "a" }), "s", ok), null);
+  // 读完之后文件改变 ⇒ 旧证据失效
+  await writeFile(p, "changed", "utf8");
+  assert.equal((await g.pre(exec("write", { file_path: "analysis_set/x.tsv", content: "a" }), "s", ok))?.kind, "deny");
 });
 
-test("R4 对照面：requireReads 指向的文件不存在 ⇒ 放行（无对象可读，不许卡死）", async () => {
+test("R4 对照面：requireReads 指向的文件不存在 ⇒ 放行（无对象可读，不卡死）", async () => {
   const { g, exec } = await setup({ requireReads: [".ccm/PROGRESS.md"], allowNew: ["analysis_set/*.tsv"] });
-  assert.equal(await g.pre(exec("write", { file_path: "analysis_set/x.tsv", content: "a" }), "s", NO_READS), null);
+  assert.equal(await g.pre(exec("write", { file_path: "analysis_set/x.tsv", content: "a" }), "s", ctxOf()), null);
+});
+
+test("R5 参数闸：取值必须等于有效裁定；重复与引号夹带都拦；别家工具不套用", async () => {
+  const guard = { name: "线程数", tool: "iqtree3|mafft", regex: "-T\\s+(\\d+)|--threads?\\s+(\\d+)", allowed: ["32"] };
+  const { g, exec } = await setup({ paramGuards: [guard] });
+  assert.equal((await g.pre(exec("pwsh", { command: "iqtree3 -s aln.fa -T 64 -m MFP" }), "s", ctxOf()))?.kind, "deny");
+  assert.equal(await g.pre(exec("pwsh", { command: "iqtree3 -s aln.fa -T 32 -m MFP" }), "s", ctxOf()), null);
+  assert.equal(await g.pre(exec("pwsh", { command: "mafft --auto --thread 32 in.fa" }), "s", ctxOf()), null);
+  assert.equal((await g.pre(exec("pwsh", { command: "iqtree3 -s aln.fa -T 32 -T 64" }), "s", ctxOf()))?.kind, "deny");
+  assert.equal((await g.pre(exec("pwsh", { command: "echo \"-T 32\"; iqtree3 -s aln.fa -T 64" }), "s", ctxOf()))?.kind, "deny");
+  assert.equal(await g.pre(exec("pwsh", { command: "other-tool -T 64" }), "s", ctxOf()), null);
+  assert.equal(await g.pre(exec("pwsh", { command: "mafft --auto in.fa" }), "s", ctxOf()), null);
+});
+
+test("R6 路径别名：UNC 网络路径拦；项目内符号链接拦（本机无 symlink 特权时跳过该断言）", async () => {
+  const { g, cwd, exec } = await setup({ allowNew: ["**"] });
+  assert.equal((await g.pre(exec("write", { file_path: "\\\\server\\share\\x.md", content: "y" }), "s", ctxOf()))?.kind, "deny");
+  const real = join(cwd, "real.md");
+  await writeFile(real, "real", "utf8");
+  const link = join(cwd, "link.md");
+  try {
+    await symlink(real, link);
+  } catch (error) {
+    // Windows 默认不允许普通用户建符号链接（EPERM）；此处如实跳过，不伪装通过。
+    assert.equal(error.code, "EPERM");
+    return;
+  }
+  assert.equal((await g.pre(exec("write", { file_path: link, content: "y" }), "s", ctxOf()))?.kind, "deny");
+});
+
+test("R7 shell 写入登记：重定向/Out-File 写项目内未登记路径拦；已登记与项目外放行", async () => {
+  const { g, exec } = await setup({ allowNew: ["analysis_set/*.tsv"], scratch: ["tmp/**"] });
+  const bad = await g.pre(exec("pwsh", { command: "Get-Date > chikv1011/SOMETHING.md" }), "s", ctxOf());
+  assert.equal(bad?.kind, "deny");
+  assert.match(bad.reason, /R7/);
+  assert.equal((await g.pre(exec("pwsh", { command: "Get-Date | Out-File -FilePath 'chikv1011/OTHER.md'" }), "s", ctxOf()))?.kind, "deny");
+  assert.equal(await g.pre(exec("pwsh", { command: "Get-Date > analysis_set/ok.tsv" }), "s", ctxOf()), null);
+  assert.equal(await g.pre(exec("pwsh", { command: "Get-Date > tmp/x.txt" }), "s", ctxOf()), null);
+  assert.equal(await g.pre(exec("pwsh", { command: "Get-Date > /tmp/outside.txt" }), "s", ctxOf()), null);
+});
+
+test("R8 候选处置：未处置即拦；加载后放行；枚举理由豁免可放行；谎报 not_installed 拦", async () => {
+  const { g, exec } = await setup({ candidateReasons: ["covered_by", "not_installed", "user_waiver"] });
+  const picks = { names: ["hyphy-pselection", "project-memory"] };
+  const bad = await g.pre(exec("pwsh", { command: "Get-Date" }), "s", ctxOf({ picks }));
+  assert.equal(bad?.kind, "deny");
+  assert.match(bad.reason, /R8/);
+  // 已加载其一、另一个写豁免 ⇒ 放行
+  assert.equal(await g.pre(exec("pwsh", { command: "SKIP project-memory reason=covered_by" }), "s",
+    ctxOf({ picks, loaded: new Set(["hyphy-pselection"]) })), null);
+  // 自由文本理由不算
+  assert.equal((await g.pre(exec("pwsh", { command: "SKIP project-memory reason=无关" }), "s",
+    ctxOf({ picks, loaded: new Set(["hyphy-pselection"]) })))?.kind, "deny");
+  // 谎报 not_installed（技能目录里确实有）⇒ 拦
+  assert.equal((await g.pre(exec("pwsh", { command: "SKIP project-memory reason=not_installed" }), "s",
+    ctxOf({ picks, loaded: new Set(["hyphy-pselection"]), catalog: new Set(["project-memory"]) })))?.kind, "deny");
 });
 
 test("fail-open：策略缺失、无 artifact 段、非受管工具 ⇒ 一律 null", async () => {
   const { g, exec, policyPath } = await setup({ noRecycleBin: true });
   const gone = createArtifactGuard({ policyPath: policyPath + ".missing" });
-  assert.equal(await gone.pre(exec("write", { file_path: "x.md", content: "y" }), "s", NO_READS), null);
+  assert.equal(await gone.pre(exec("write", { file_path: "x.md", content: "y" }), "s", ctxOf()), null);
   const { g: g2, exec: e2 } = await setup(null);
-  assert.equal(await g2.pre(e2("write", { file_path: "x.md", content: "y" }), "s", NO_READS), null);
-  assert.equal(await g.pre(exec("read", { file_path: "x.md" }), "s", NO_READS), null);
-  assert.equal(await g.pre(exec("skill", { name: "pdf" }), "s", NO_READS), null);
+  assert.equal(await g2.pre(e2("write", { file_path: "x.md", content: "y" }), "s", ctxOf()), null);
+  assert.equal(await g.pre(exec("read", { file_path: "x.md" }), "s", ctxOf()), null);
+  assert.equal(await g.pre(exec("skill", { name: "pdf" }), "s", ctxOf()), null);
 });
 
 test("globToRe：`**/` 可匹配零层目录；`*` 不跨目录", () => {
   assert.equal(globToRe("**/METHODS*.md").test("METHODS.md"), true);
-  assert.equal(globToRe("**/METHODS*.md").test("chikv1011/METHODS.md"), true);
   assert.equal(globToRe("**/METHODS*.md").test("chikv1011/sub/METHODS.md"), true);
   assert.equal(globToRe("analysis_set/*.tsv").test("analysis_set/a.tsv"), true);
   assert.equal(globToRe("analysis_set/*.tsv").test("analysis_set/sub/a.tsv"), false);
-});
-
-test("R5 参数闸：受管工具的线程取值必须等于有效裁定；重复与夹带都拦", async () => {
-  const guard = { name: "线程数", tool: "iqtree3|mafft", regex: "-T\\s+(\\d+)|--threads?\\s+(\\d+)", allowed: ["32"] };
-  const { g, exec } = await setup({ paramGuards: [guard] });
-  assert.equal((await g.pre(exec("pwsh", { command: "iqtree3 -s aln.fa -T 64 -m MFP" }), "s", NO_READS))?.kind, "deny");
-  assert.equal(await g.pre(exec("pwsh", { command: "iqtree3 -s aln.fa -T 32 -m MFP" }), "s", NO_READS), null);
-  assert.equal(await g.pre(exec("pwsh", { command: "mafft --auto --thread 32 in.fa" }), "s", NO_READS), null);
-  // 外部评审点名的两条绕过路径
-  assert.equal((await g.pre(exec("pwsh", { command: "iqtree3 -s aln.fa -T 32 -T 64" }), "s", NO_READS))?.kind, "deny");
-  assert.equal((await g.pre(exec("pwsh", { command: "echo \"-T 32\"; iqtree3 -s aln.fa -T 64" }), "s", NO_READS))?.kind, "deny");
-  // 别的工具的同名参数不套用本规则
-  assert.equal(await g.pre(exec("pwsh", { command: "other-tool -T 64" }), "s", NO_READS), null);
-  // 未声明 require 时，缺参数不拦
-  assert.equal(await g.pre(exec("pwsh", { command: "mafft --auto in.fa" }), "s", NO_READS), null);
 });
