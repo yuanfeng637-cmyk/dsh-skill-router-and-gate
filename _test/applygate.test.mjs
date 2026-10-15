@@ -12,7 +12,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -36,7 +36,7 @@ const T = (name, fn) => (importError ? test.skip(name) : test(name, fn));
 let snapshotSkills = [];
 const mkSkill = (name) => ({ name, invocation: { modelInvocable: true }, description: "d " + name, whenToUse: "when " + name });
 
-function harness() {
+function harness(services = {}) {
   const handlers = new Map();
   const ctx = {
     on: (name, fn) => {
@@ -46,7 +46,7 @@ function harness() {
       return () => {};
     },
     skills: { snapshot: async () => ({ skills: snapshotSkills, complete: true }) },
-    get: () => undefined,
+    get: (name) => services[name],
   };
   apply(ctx);
 
@@ -76,6 +76,69 @@ const XLSX = 'python -c "import openpyxl; openpyxl.load_workbook(p)"';
 const PDF = 'python -c "import fitz; fitz.open(p)"';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const why = (d) => `实际=${d?.kind} skill=${d?.skill ?? "-"} reason=${String(d?.reason ?? "").slice(0, 90)}`;
+
+T("writing rule: inject skill + full reference despite judge none/unsure/error and repeated recommendations", async () => {
+  for (const mode of ["none", "unsure", "error", "pick"]) {
+    let calls = 0;
+    const h = harness({
+      agentDefaultModel: { currentSelection: () => ({ provider: "test", model: "test" }) },
+      llm: { async *stream() {
+        calls++;
+        if (mode === "error") throw new Error("offline");
+        yield { type: "text-delta", text: mode === "pick" ? '{"skills":[{"name":"other-a"},{"name":"other-b"},{"name":"other-c"}]}' : mode === "unsure" ? '{"unsure":true}' : '{"skills":[]}' };
+      } },
+    });
+    snapshotSkills = ["scientific-writing", "other-a", "other-b", "other-c"].map(mkSkill);
+    const agent = agentOf("writing-" + mode);
+    for (let i = 0; i < 4; i++) {
+      const d = await h.preStep(agent, "请写材料方法");
+      const injection = d.messages.find((m) => m.source?.kind === "skill-routing");
+      assert.ok(injection);
+      assert.equal(injection.source.via, "writing-rule");
+      assert.match(injection.content[0].text, /scientific-writing/);
+      assert.match(injection.content[0].text, /references\/imrad_structure.md/);
+      assert.match(injection.content[0].text, /WHOLE file without offset\/limit/);
+      if (mode === "pick" && i < 2) {
+        assert.deepEqual(injection.source.entries.map((p) => p.name), ["scientific-writing", "other-a", "other-b", "other-c"]);
+      }
+    }
+    assert.equal(calls, 4, "each fake judge mode must actually execute");
+    await h.postExecute(skillExec(agent.id, "scientific-writing"), { isError: false });
+    assert.equal((await h.preStep(agent, "写论文")).messages.some((m) => m.source?.kind === "skill-routing"), false);
+  }
+});
+
+T("path R4 integration: partial/failed/blocked reads never unlock; full read unlocks, content change invalidates", async () => {
+  const policy = join(dir, "path-policy.json");
+  const ref = join(dir, "imrad_structure.md");
+  writeFileSync(ref, "reference v1");
+  writeFileSync(policy, JSON.stringify({ version: 1, protect: ["unused"], actions: [], artifact: {
+    allowNew: ["**/*.md"], specs: [{ paths: ["**/METHODS*.md"], genre: ["methods"], requireReads: [ref] }],
+  } }));
+  process.env.DSH_SKILL_GATE_POLICY = policy;
+  try {
+    const h = harness();
+    const agent = { id: "path-r4", session: { header: { cwd: dir } } };
+    const write = { name: "write", agent, arguments: { file_path: "METHODS.md", content: "genre: methods" } };
+    const read = (extra = {}) => ({ name: "read", agent, arguments: { file_path: ref, ...extra } });
+    for (const extra of [{ offset: 0 }, { limit: 99999 }]) {
+      await h.postExecute(read(extra), { isError: false });
+      assert.match((await h.preExecute(write)).reason, /R4/);
+    }
+    await h.postExecute(read(), { isError: true });
+    assert.match((await h.preExecute(write)).reason, /R4/);
+    h.register("tools/post-execute", async (exec, result, next) => {
+      await next();
+      return exec.arguments.block ? { kind: "block" } : { kind: "accept" };
+    });
+    await h.postExecute(read({ block: true }), { isError: false });
+    assert.match((await h.preExecute(write)).reason, /R4/);
+    await h.postExecute(read(), { isError: false });
+    assert.equal((await h.preExecute(write)).kind, "allow");
+    writeFileSync(ref, "reference v2");
+    assert.match((await h.preExecute(write)).reason, /R4/);
+  } finally { delete process.env.DSH_SKILL_GATE_POLICY; }
+});
 
 /** 等**匹配条件的**行出现（不能只等"任意 gate 行"：早先用例的行会先到）。 */
 async function gateRows(pred, timeoutMs = 1500) {

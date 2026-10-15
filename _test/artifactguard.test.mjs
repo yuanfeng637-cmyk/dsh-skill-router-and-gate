@@ -37,6 +37,65 @@ const CTX = { reads: new Set(), picks: null, loaded: new Set() };
 const ctxOf = (o = {}) => ({ ...CTX, ...o });
 const shaOf = async (p) => createHash("sha256").update(await readFile(p)).digest("hex");
 
+test("R4 path specs: root/nested/case/Chinese matches, write/edit aliases, unrelated targets excluded", async () => {
+  const { g, cwd, exec } = await setup({ allowNew: ["**/*.md"], specs: [{
+    paths: ["**/METHODS*.md", "**/材料方法*.md", "**/MATERIALS*.md"],
+    genre: ["methods"], requireReads: ["reference.md"],
+  }] }, ["reference.md"]);
+  const p = join(cwd, "reference.md");
+  const valid = ctxOf({ reads: new Set([readKey(p, await shaOf(p))]) });
+  for (const target of ["METHODS.md", "sub/methods-v2.md", "材料方法.md", "sub/MATERIALS-main.md"]) {
+    for (const tool of ["write", "create_file", "edit"]) {
+      for (const key of ["file_path", "filePath", "path"]) {
+        const e = exec(tool, { [key]: target, content: "genre: methods", new_string: "genre: methods" });
+        assert.match((await g.pre(e, "s", ctxOf())).reason, /R4/);
+        assert.equal(await g.pre(e, "s", valid), null);
+      }
+    }
+  }
+  assert.equal(await g.pre(exec("write", { path: "notes.md", content: "notes" }), "s", ctxOf()), null);
+  assert.equal(await g.pre(exec("write", { path: "../METHODS.md", content: "genre: methods" }), "s", ctxOf()), null);
+  assert.equal(await g.pre(exec("pwsh", { command: "Get-Date" }), "s", ctxOf()), null);
+  await writeFile(p, "changed");
+  assert.match((await g.pre(exec("edit", { path: "METHODS.md", new_string: "genre: methods" }), "s", valid)).reason, /R4/);
+});
+
+test("R4 path specs: global and ALL matching specs accumulate, hash-only/path-only do not count", async () => {
+  const { g, cwd, exec } = await setup({ allowNew: ["**/*.md"], requireReads: ["global.md"], specs: [
+    { paths: ["**/METHODS*.md"], requireReads: ["a.md"] },
+    { paths: ["**/*.md"], requireReads: ["b.md", "missing.md"] },
+  ] }, ["global.md", "a.md", "b.md"]);
+  const reads = new Set();
+  const e = exec("write", { path: "METHODS.md", content: "genre: methods" });
+  for (const file of ["global.md", "a.md", "b.md"]) {
+    const p = join(cwd, file);
+    reads.add(p);
+    reads.add(await shaOf(p));
+    assert.match((await g.pre(e, "s", ctxOf({ reads }))).reason, /R4/);
+    reads.add(readKey(p, await shaOf(p)));
+  }
+  assert.equal(await g.pre(e, "s", ctxOf({ reads })), null);
+  assert.match((await g.pre(e, "next-turn", ctxOf())).reason, /R4/);
+});
+
+test("R4 path specs: direct shell writes and registered output paths require the same reference", async () => {
+  const { g, cwd, exec } = await setup({
+    allowNew: ["**/*.md"], requireReads: ["global.md"],
+    specs: [{ paths: ["**/METHODS*.md"], requireReads: ["reference.md"] }],
+  }, ["reference.md", "global.md"], [{ command: "registered-cmd", files: [{ role: "output", path: "METHODS.md" }] }]);
+  const p = join(cwd, "reference.md");
+  const reads = new Set([readKey(p, await shaOf(p))]);
+  for (const command of ["echo x > METHODS.md", "Set-Content -Path 'METHODS.md' -Value x"]) {
+    assert.match((await g.pre(exec("pwsh", { command }), "s", ctxOf())).reason, /R4/);
+    // Existing global scope is unchanged: unregistered shell writes only use matching specs.
+    assert.equal(await g.pre(exec("pwsh", { command }), "s", ctxOf({ reads })), null);
+  }
+  assert.match((await g.pre(exec("pwsh", { command: "registered-cmd" }), "s", ctxOf({ reads }))).reason, /R4/);
+  const global = join(cwd, "global.md");
+  reads.add(readKey(global, await shaOf(global)));
+  assert.equal(await g.pre(exec("pwsh", { command: "registered-cmd" }), "s", ctxOf({ reads })), null);
+});
+
 test("R1 禁回收站：移动到垃圾/回收站类目录拦；彻底删除与非回收站移动放行", async () => {
   const { g, exec } = await setup({ noRecycleBin: true });
   assert.equal((await g.pre(exec("pwsh", { command: "Move-Item -LiteralPath 'D:/proj/a.md' -Destination 'D:/proj/_trash/'" }), "s", ctxOf()))?.kind, "deny");

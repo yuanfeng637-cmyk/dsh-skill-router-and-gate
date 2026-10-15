@@ -173,6 +173,32 @@ MIT — see [LICENSE](LICENSE).
 
 ## Development
 
+Runtime v24 adds deterministic academic-writing routing. Explicit Chinese requests such as
+`写材料方法`, `写材料与方法`, `写论文` and English requests such as `write the Methods section`
+select `scientific-writing` when it exists in the current invocable catalog. This rule survives
+judge `none`/`unsure`/failure and repeated-recommendation suppression. Confirmed loads and the
+existing master switch still apply. The injection names `references/imrad_structure.md`, resolved
+relative to the loaded skill's `SKILL.md` directory, and directs a full read without offset/limit.
+
+Policy schema `version: 1` now also supports optional `artifact.specs[].requireReads`:
+
+```json
+{
+  "paths": ["**/METHODS*.md", "**/MATERIALS*.md", "**/材料方法*.md"],
+  "genre": ["methods", "methods-prose", "材料方法"],
+  "requireReads": ["C:/Users/19818/.dsh/skills/scientific-writing/references/imrad_structure.md"]
+}
+```
+
+Paths are case-insensitive project-relative globs; `**/` includes the project root. Every matching
+spec contributes its prerequisites in addition to global `artifact.requireReads`. Reference paths
+can be absolute or relative to project cwd. R4 covers write/create_file/edit targets, shell targets
+recognized by the existing R7 scanner, and exact registered action outputs. The global R4 scope
+remains write tools and registered actions. Evidence is still per-turn `absolute-path#sha256`:
+partial/failed/blocked reads do not count, and content changes invalidate it. Missing reference
+files and internal exceptions retain the existing fail-open behavior. Arbitrary script-internal
+writes remain outside the plugin's observable scope.
+
 ```sh
 npm test     # node --test, with a stub for @deepseek-ai/dsh-llm (that package only exists inside the host)
 npm run check
