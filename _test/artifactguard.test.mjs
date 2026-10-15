@@ -148,6 +148,10 @@ test("R7 shell 写入登记：重定向/Out-File 写项目内未登记路径拦�
   assert.equal(await g.pre(exec("pwsh", { command: "ssh host 'cd x; iqtree3 -s a.fa -T 32 > log/x.log 2>&1'" }), "s", ctxOf()), null);
   // 但显式标志即便带引号也要查
   assert.equal((await g.pre(exec("pwsh", { command: "Out-File -FilePath 'chikv1011/OTHER.md' -InputObject x" }), "s", ctxOf()))?.kind, "deny");
+  // 自查实测的第三次误拦：箭头/比较符与不像路径的目标都不是写入
+  assert.equal(await g.pre(exec("pwsh", { command: "git commit -m \"VERSION 19 -> 22\"" }), "s", ctxOf()), null);
+  assert.equal(await g.pre(exec("pwsh", { command: "Get-Date > 22" }), "s", ctxOf()), null);
+  assert.equal((await g.pre(exec("pwsh", { command: "Get-Date > out.txt" }), "s", ctxOf()))?.kind, "deny");
 });
 
 test("R8 候选处置：未处置即拦；加载后放行；枚举理由豁免可放行；谎报 not_installed 拦", async () => {
