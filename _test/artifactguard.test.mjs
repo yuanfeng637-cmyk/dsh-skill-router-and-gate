@@ -200,6 +200,12 @@ test("R9 质疑强制：未加载 claim-check 拦；缺四段式拦；判定值�
   const row = JSON.parse(rows[0]);
   assert.equal(row.verdict, "已验");
   assert.match(row.claim, /计数器/);
+  // v23：edit 的正文在 new_string，R9 必须从 new_string 取
+  const { g: ge, exec: ee } = await setup({ claimGate: { ledger: join(root, "l2.ndjson") } }, ["analysis_set/a.tsv"]);
+  const noBlock = await ge.pre(ee("edit", { file_path: "analysis_set/a.tsv", old_string: "x", new_string: "y" }), "s", ctxOf({ loaded }));
+  assert.equal(noBlock?.kind, "deny");
+  assert.match(noBlock.reason, /R9/);
+  assert.equal(await ge.pre(ee("edit", { file_path: "analysis_set/a.tsv", old_string: "x", new_string: good }), "s", ctxOf({ loaded })), null);
 });
 
 test("fail-open：策略缺失、无 artifact 段、非受管工具 ⇒ 一律 null", async () => {
