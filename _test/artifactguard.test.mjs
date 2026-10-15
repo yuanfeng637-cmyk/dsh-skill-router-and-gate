@@ -160,6 +160,9 @@ test("R8 候选处置：未处置即拦；加载后放行；枚举理由豁免�
   // 谎报 not_installed（技能目录里确实有）⇒ 拦
   assert.equal((await g.pre(exec("pwsh", { command: "SKIP project-memory reason=not_installed" }), "s",
     ctxOf({ picks, loaded: new Set(["hyphy-pselection"]), catalog: new Set(["project-memory"]) })))?.kind, "deny");
+  // candidateExempt 里的候选永不强制处置（用户裁定：不必非要加载 grill-me）
+  const { g: g3, exec: e3 } = await setup({ candidateExempt: ["grill-me"] });
+  assert.equal(await g3.pre(e3("pwsh", { command: "Get-Date" }), "s", ctxOf({ picks: { names: ["grill-me"] } })), null);
 });
 
 test("fail-open：策略缺失、无 artifact 段、非受管工具 ⇒ 一律 null", async () => {
