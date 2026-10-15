@@ -152,6 +152,11 @@ test("R7 shell 写入登记：重定向/Out-File 写项目内未登记路径拦�
   assert.equal(await g.pre(exec("pwsh", { command: "git commit -m \"VERSION 19 -> 22\"" }), "s", ctxOf()), null);
   assert.equal(await g.pre(exec("pwsh", { command: "Get-Date > 22" }), "s", ctxOf()), null);
   assert.equal((await g.pre(exec("pwsh", { command: "Get-Date > out.txt" }), "s", ctxOf()))?.kind, "deny");
+  // v22.2：`edit` 也受管（此前只覆盖 write ⇒ 我改文档走 edit 就绕过了）
+  assert.equal(await g.pre(exec("edit", { file_path: "analysis_set/ok.tsv", old_string: "a", new_string: "b" }), "s", ctxOf()), null);
+  assert.equal((await g.pre(exec("edit", { file_path: "tmp/../chikv1011/ALIGNMENT.md", old_string: "a", new_string: "b" }), "s", ctxOf()))?.kind, "deny");
+  const { g: g4, exec: e4 } = await setup({ genrePaths: ["**/METHODS*.md"] }, ["METHODS.md"]);
+  assert.equal((await g4.pre(e4("edit", { file_path: "METHODS.md", old_string: "a", new_string: "b" }), "s", ctxOf()))?.kind, "deny");
 });
 
 test("R8 候选处置：未处置即拦；加载后放行；枚举理由豁免可放行；谎报 not_installed 拦", async () => {
