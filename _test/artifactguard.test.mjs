@@ -11,7 +11,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile, link } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createArtifactGuard, globToRe, readKey } from "../lib/artifactguard.js";
@@ -99,20 +100,38 @@ test("R5 参数闸：取值必须等于有效裁定；重复与引号夹带都�
   assert.equal(await g.pre(exec("pwsh", { command: "mafft --auto in.fa" }), "s", ctxOf()), null);
 });
 
-test("R6 路径别名：UNC 网络路径拦；项目内符号链接拦（本机无 symlink 特权时跳过该断言）", async () => {
+test("R6 路径别名：UNC 拦；硬链接拦；符号链接/junction 拦（本机无特权时跳过该断言）", async () => {
   const { g, cwd, exec } = await setup({ allowNew: ["**"] });
   assert.equal((await g.pre(exec("write", { file_path: "\\\\server\\share\\x.md", content: "y" }), "s", ctxOf()))?.kind, "deny");
+
+  // 硬链接：普通用户即可创建 ⇒ 必须拦（改一个会改到范围外的同一文件）
   const real = join(cwd, "real.md");
   await writeFile(real, "real", "utf8");
-  const link = join(cwd, "link.md");
+  const hard = join(cwd, "hard.md");
+  await link(real, hard);
+  assert.equal((await g.pre(exec("write", { file_path: hard, content: "y" }), "s", ctxOf()))?.kind, "deny");
+
+  // 文件符号链接（Windows 默认 EPERM）
+  const linkPath = join(cwd, "link.md");
   try {
-    await symlink(real, link);
+    await symlink(real, linkPath);
   } catch (error) {
-    // Windows 默认不允许普通用户建符号链接（EPERM）；此处如实跳过，不伪装通过。
-    assert.equal(error.code, "EPERM");
-    return;
+    assert.equal(error.code, "EPERM");   // 如实跳过，不伪装通过
   }
-  assert.equal((await g.pre(exec("write", { file_path: link, content: "y" }), "s", ctxOf()))?.kind, "deny");
+  if (existsSync(linkPath)) {
+    assert.equal((await g.pre(exec("write", { file_path: linkPath, content: "y" }), "s", ctxOf()))?.kind, "deny");
+  }
+
+  // 父目录 junction：新建文件落在链接目录里 ⇒ 拦
+  const realDir = join(cwd, "realdir");
+  await mkdir(realDir, { recursive: true });
+  const junc = join(cwd, "junc");
+  try {
+    await symlink(realDir, junc, "junction");
+  } catch { /* 无权限就跳过 */ }
+  if (existsSync(junc)) {
+    assert.equal((await g.pre(exec("write", { file_path: "junc/new.md", content: "y" }), "s", ctxOf()))?.kind, "deny");
+  }
 });
 
 test("R7 shell 写入登记：重定向/Out-File 写项目内未登记路径拦；已登记与项目外放行", async () => {
