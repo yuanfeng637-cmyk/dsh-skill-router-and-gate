@@ -12,7 +12,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, existsSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -76,6 +76,93 @@ const XLSX = 'python -c "import openpyxl; openpyxl.load_workbook(p)"';
 const PDF = 'python -c "import fitz; fitz.open(p)"';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const why = (d) => `实际=${d?.kind} skill=${d?.skill ?? "-"} reason=${String(d?.reason ?? "").slice(0, 90)}`;
+
+T("generic apply: judge none, full-read acceptance, R8 disposition independence, loaded skill/new turn and hash invalidation", async () => {
+  const policy = join(dir, "generic-policy.json");
+  writeFileSync(policy, JSON.stringify({ version: 1, actions: [], artifact: {
+    registerNew: false, resourceRouting: { enabled: true, minScore: 0.28, resourceMinScore: 0.22, artifactMinScore: 0.45, topN: 3 },
+  } }));
+  process.env.DSH_SKILL_GATE_POLICY = policy;
+  try {
+    for (const [name, query, target, reference] of [
+      ["figure-legend-local", "给这张图写图注 / figure legend", "figure_legend.md", "# Figure legend 图注\nFigure legends and 图注 requirements"],
+      ["office-docx", "做 docx 报告", "report.docx", "# DOCX\nUse for .docx reports"],
+      ["office-xlsx", "做 xlsx 表", "table.xlsx", "# XLSX\nUse for .xlsx tables"],
+    ]) {
+      const root = join(dir, name);
+      mkdirSync(join(root, "references"), { recursive: true });
+      const ref = join(root, "references", "workflow.md");
+      writeFileSync(join(root, "SKILL.md"), `# ${name}\nWhen to use: ${query}`);
+      writeFileSync(ref, reference);
+      snapshotSkills = [{ name, path: join(root, "SKILL.md"), description: query }];
+      const h = harness({ agentDefaultModel: { currentSelection: () => ({ provider: "test", model: "test" }) },
+        llm: { async *stream() { yield { type: "text-delta", text: '{"skills":[]}' }; } } });
+      const agent = { id: name, session: { header: { cwd: dir } } };
+      const d = await h.preStep(agent, query);
+      const injection = d.messages.find((m) => m.source?.kind === "skill-routing");
+      assert.equal(injection.source.via, "local-index");
+      assert.match(injection.content[0].text, /workflow.md.*READ FIRST/);
+      const write = { name: "write", agent, arguments: { file_path: target, content: "output" } };
+      assert.match((await h.preExecute(write)).reason, /R8/);
+      // An allowed R8 waiver clears picks but must preserve route prerequisites.
+      await h.preExecute({ name: "pwsh", agent, arguments: { command: `# SKIP ${name} reason=covered_by` } });
+      assert.match((await h.preExecute(write)).reason, /R4/);
+      const read = (extra = {}) => ({ name: "read", agent, arguments: { file_path: ref, ...extra } });
+      await h.postExecute(read({ limit: 999999 }), { isError: false });
+      assert.match((await h.preExecute(write)).reason, /R4/);
+      await h.postExecute(read(), { isError: true });
+      assert.match((await h.preExecute(write)).reason, /R4/);
+      let blockNext = true;
+      h.register("tools/post-execute", (_exec, _result, next) => {
+        if (blockNext) { blockNext = false; return { kind: "block" }; }
+        return next();
+      });
+      await h.postExecute(read(), { isError: false });
+      assert.match((await h.preExecute(write)).reason, /R4/);
+      await h.postExecute(read(), { isError: false });
+      assert.equal((await h.preExecute(write)).kind, "allow");
+      writeFileSync(ref, reference + "\nchanged");
+      assert.match((await h.preExecute(write)).reason, /R4/);
+      await h.postExecute(read(), { isError: false });
+      assert.equal((await h.preExecute(write)).kind, "allow");
+      await h.postExecute({ name: "skill", agent, arguments: { name } }, { isError: false });
+      for (let turn = 0; turn < 4; turn++) {
+        const again = await h.preStep(agent, query);
+        assert.equal(again.messages.find((m) => m.source?.kind === "skill-routing").source.via, "local-index");
+        assert.match((await h.preExecute(write)).reason, /R4/, "new turn must read even for an already loaded skill");
+        await h.postExecute(read(), { isError: false });
+        assert.equal((await h.preExecute(write)).kind, "allow");
+      }
+      await h.preStep(agent, "unrelated zzyy");
+      assert.equal((await h.preExecute(write)).kind, "allow", "new task replaces route references");
+      await h.disposed(agent);
+    }
+  } finally { delete process.env.DSH_SKILL_GATE_POLICY; }
+});
+
+T("model-only relevant skill also gets output-derived reference gating without lexical query hits", async () => {
+  const root = join(dir, "model-only");
+  mkdirSync(join(root, "references"), { recursive: true });
+  writeFileSync(join(root, "SKILL.md"), "# Aurora transformation");
+  const ref = join(root, "references", "guide.md");
+  writeFileSync(ref, "# Workflow\nUse .quasar outputs for telemetry.");
+  const policy = join(dir, "model-only-policy.json");
+  writeFileSync(policy, JSON.stringify({ version: 1, artifact: { registerNew: false } }));
+  process.env.DSH_SKILL_GATE_POLICY = policy;
+  try {
+    snapshotSkills = [{ name: "aurora", path: join(root, "SKILL.md"), description: "Telemetry" }];
+    const h = harness({ agentDefaultModel: { currentSelection: () => ({ provider: "test", model: "test" }) },
+      llm: { async *stream() { yield { type: "text-delta", text: '{"skills":[{"name":"aurora"}]}' }; } } });
+    const agent = { id: "model-only", session: { header: { cwd: dir } } };
+    const d = await h.preStep(agent, "opaque zzyy");
+    assert.equal(d.messages.find((m) => m.source?.kind === "skill-routing").source.via, "pick");
+    await h.postExecute({ name: "skill", agent, arguments: { name: "aurora" } }, { isError: false });
+    const write = { name: "write", agent, arguments: { file_path: "output.quasar", content: "output" } };
+    assert.match((await h.preExecute(write)).reason, /R4/);
+    await h.postExecute({ name: "read", agent, arguments: { file_path: ref } }, { isError: false });
+    assert.equal((await h.preExecute(write)).kind, "allow");
+  } finally { delete process.env.DSH_SKILL_GATE_POLICY; }
+});
 
 T("writing rule: inject skill + full reference despite judge none/unsure/error and repeated recommendations", async () => {
   for (const mode of ["none", "unsure", "error", "pick"]) {
