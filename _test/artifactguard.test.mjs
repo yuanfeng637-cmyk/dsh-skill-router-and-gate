@@ -165,6 +165,29 @@ test("R8 候选处置：未处置即拦；加载后放行；枚举理由豁免�
   assert.equal(await g3.pre(e3("pwsh", { command: "Get-Date" }), "s", ctxOf({ picks: { names: ["grill-me"] } })), null);
 });
 
+test("R9 质疑强制：未加载 claim-check 拦；缺四段式拦；判定值不合法拦；通过后由闸门追加台账", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cg-"));
+  const ledger = join(root, "claim-check.ndjson");
+  const { g, exec } = await setup({ claimGate: { ledger }, allowNew: ["analysis_set/*.tsv"] });
+  const good = "CLAIM: 计数器 = 42\nCOUNTER: 它可能是 41（少读了一条）\nCHECK: 重算一遍并比对\nVERDICT: 已验\n";
+  const loaded = new Set(["claim-check"]);
+  // ① 未加载 skill ⇒ 拦（强制加载）
+  const notLoaded = await g.pre(exec("write", { file_path: "analysis_set/a.tsv", content: good }), "s", ctxOf());
+  assert.equal(notLoaded?.kind, "deny");
+  assert.match(notLoaded.reason, /R9/);
+  // ② 缺四段式 ⇒ 拦（强制记载）
+  assert.equal((await g.pre(exec("write", { file_path: "analysis_set/a.tsv", content: "no fields" }), "s", ctxOf({ loaded })))?.kind, "deny");
+  // ③ 判定值不合法 ⇒ 拦
+  assert.equal((await g.pre(exec("write", { file_path: "analysis_set/a.tsv", content: good.replace("已验", "大概对") }), "s", ctxOf({ loaded })))?.kind, "deny");
+  // ④ 合规 ⇒ 放行，且台账里多出一行（闸门自己写，不靠模型自述）
+  assert.equal(await g.pre(exec("write", { file_path: "analysis_set/a.tsv", content: good }), "s", ctxOf({ loaded })), null);
+  const rows = (await readFile(ledger, "utf8")).trim().split("\n");
+  assert.equal(rows.length, 1);
+  const row = JSON.parse(rows[0]);
+  assert.equal(row.verdict, "已验");
+  assert.match(row.claim, /计数器/);
+});
+
 test("fail-open：策略缺失、无 artifact 段、非受管工具 ⇒ 一律 null", async () => {
   const { g, exec, policyPath } = await setup({ noRecycleBin: true });
   const gone = createArtifactGuard({ policyPath: policyPath + ".missing" });
