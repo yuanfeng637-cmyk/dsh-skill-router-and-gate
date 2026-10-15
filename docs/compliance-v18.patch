@@ -1,0 +1,759 @@
+diff --git a/README.md b/README.md
+index 48c2e1d..9a4e1e3 100644
+--- a/README.md
++++ b/README.md
+@@ -10,6 +10,31 @@
+ **Name vs. short handle.** The package and repository are `dsh-skill-router-and-gate`; the **slash command and
+ environment variables use the short handle `skill-gate`** (`/skill-gate`, `DSH_SKILL_GATE_*`). Same plugin.
+ 
++## v0.1.4：可机检的依从约束
++
++加载成功现在写 `skill-loaded`，并同步路由账本的 `loaded`。它证明加载，不能证明技能全部得到遵守。
++加载 `bioinformatics-toolkit` 后，首次直接执行裸命令 `mafft` / `iqtree` / `iqtree2` / `iqtree3`
++前，须有同会话先前成功、被接受的独立 `--help` / `-h` 输出；有效期 30 分钟。
++独立版本查询放行，但不计帮助证据。路径调用、复合 shell、SSH、脚本内部调用不在这个默认规则的覆盖面。
++
++项目特有约束通过 `DSH_SKILL_GATE_POLICY=<策略 JSON 的绝对路径>` 显式开启；未设置时不猜项目标准。
++完整策略格式和例子见 [设计记录末节](docs/DESIGN.md)。策略用 `protect` 字符串命中受管命令，
++用 `actions[].command` 固定完整命令；用输入/脚本/引用 SHA256、用户裁定原文和来源 SHA256、
++先前验证命令及实际输出片段建立前置条件。达到任一阈值（wall ≥300 秒 / CPU ≥1,800 秒 /
++输出 ≥100 MiB / 请求 ≥100 次）须声明假设、至少一项已成功的便宜验证及中止条件。
++四项是显式估计，不是插件对任意进程的预测或资源配额。
++
++审计默认写 `~/.dsh/skill-gate-compliance.ndjson`，可用 `DSH_SKILL_GATE_COMPLIANCE_TRACE` 改路径。
++前置审计写入失败就拒绝受管动作；结果审计失败不改变已执行事实，也不会解锁后续验证。
++回执含实际文本片段、输入/脚本来源、输出文件 SHA256、生成时间与插件版本。
++输出文件未更新或不存在时 `receiptComplete=false`；旧脚本/引用来源缺标注或超过24小时会记告警。
++没有回复发布闸，因此日志不能保证模型在最终回复展示证据或禁止它说“完成”。
++后台、远端、普通工具文本中的退出码，以及自然语言规则的科学含义仍需要执行端或人工核验。
++
++策略应由用户审核和保管；插件不提供防止 agent 改写策略的安全隔离。错误/缺失的已配置策略会拒绝 shell 工具，
++可通过 `/skill-gate off` 恢复；总开关及文件 kill switch 现在对全部执行闸生效。
++新增依从闸没有“拒绝三次后放行”的退路；原格式加载闸仍保留原有 `skillGateMaxDeny` 行为。
++
+ ## Why this exists
+ 
+ DSH injects the full skill catalog and expects the model to call the right skill by itself. In long sessions that
+diff --git a/_test/applygate.test.mjs b/_test/applygate.test.mjs
+index fbe5730..042b70d 100644
+--- a/_test/applygate.test.mjs
++++ b/_test/applygate.test.mjs
+@@ -19,6 +19,8 @@ import { join } from "node:path";
+ const dir = mkdtempSync(join(tmpdir(), "skillgate-apply-"));
+ const traceFile = join(dir, "trace.ndjson");
+ process.env.DSH_SKILL_GATE_TRACE = traceFile;
++process.env.DSH_SKILL_GATE_COMPLIANCE_TRACE = join(dir, "compliance.ndjson");
++delete process.env.DSH_SKILL_GATE_POLICY;
+ 
+ // 没带 --import（例如直接 `node --test`）时，`@deepseek-ai/dsh-llm` 解析不到 ⇒ 优雅跳过而不是整套失败
+ let apply = null;
+@@ -166,5 +168,30 @@ T("apply()：目录未知时仍然拦（钉住真实行为；status 文案已按
+   assert.match(String(r.reason), /office-xlsx/);
+ });
+ 
++T("apply()：成功加载同步路由账本，空工具步 loaded 也不再丢失", async () => {
++  const h = harness();
++  await h.postExecute(skillExec("sess-SYNC", "bioinformatics-toolkit"), { isError: false });
++  const blocked = await h.preExecute(cmd("sess-SYNC", "mafft --auto x.fa"));
++  assert.equal(blocked.kind, "deny"); assert.match(blocked.reason, /--help/);
++  await h.preStep(agentOf("sess-SYNC"), "");
++  await sleep(80);
++  const rows = readFileSync(traceFile, "utf8").trim().split("\n").map(JSON.parse);
++  assert.ok(rows.some((r) => r.session === "sess-SYNC" && r.stage === "skill-loaded"));
++  assert.ok(rows.some((r) => r.session === "sess-SYNC" && r.stage === "empty-query"
++    && r.loaded.includes("bioinformatics-toolkit")));
++});
++
++T("apply()：下游 pre 拒绝帮助调用后清 pending；帮助成功后生信闸解锁", async () => {
++  const h = harness(); let denyHelp = true;
++  h.register("tools/pre-execute", async () => denyHelp ? { kind: "deny", reason: "downstream" } : { kind: "allow" });
++  const help = cmd("sess-HELP", "mafft --help");
++  await h.postExecute(skillExec("sess-HELP", "bioinformatics-toolkit"), { isError: false });
++  assert.equal((await h.preExecute(help)).kind, "deny");
++  denyHelp = false;
++  assert.equal((await h.preExecute(help)).kind, "allow");
++  await h.postExecute(help, { isError: false, content: [{ type: "text", text: "Usage: mafft --auto input.fa" }] });
++  assert.equal((await h.preExecute(cmd("sess-HELP", "mafft --auto x.fa"))).kind, "allow");
++});
++
+ 
+ 
+diff --git a/docs/DESIGN.md b/docs/DESIGN.md
+index a522a6f..8774dd8 100644
+--- a/docs/DESIGN.md
++++ b/docs/DESIGN.md
+@@ -714,3 +714,147 @@ fixtures 是数组：`[{"id":"c01","query":"你确定吗","expect":["claim-check
+ ⇒ **仍然拦**（拦满 `maxDeny` 次才放行）。两者矛盾，已把文案改成与实现一致：
+ "未就绪：目录未建立时不享受兜底①，闸仍会拦（拦满上限即放行）"。
+ （是否要改成"目录未知就整体 fail-open"是另一个设计选择，未改；现行为 fail-closed 且有上限兜底。）
++
++---
++
++## v18 (2026-10-12)：从加载登记推进到可机检依从
++
++已修改源码，package 0.1.4 / VERSION=18。没有执行 refresh.ps1、重启、安装、提交、发布；
++没有改项目 MEMORY、数据或活账本。本节不重复“版本与重启”节。
++
++### 证据与现状
++
++读了本文件、index/skillgate/judge/sessionstate、指定四份测试、真实 trace 与项目 MEMORY。
++用户提供的 06:35 截止快照为1,290行；此次读取已增长至2026-10-12T08:37:36.925Z，
++共1,330行：empty-query 1028 / none 199 / injected 50 / catalog-fallback 26 / apply 16 / gate-deny 11；
++loaded 非空仍0。**gateLoaded 并非全空**：10-11T13:55 的pdf拒绝记录已有 bioinformatics-toolkit
++等八个已加载技能。所以 loaded=[] 说明两套状态未同步，不能推出完全未加载，也不是依从率统计。
++此前没有可核查的依从证据。
++
++原技能闸检查五类格式调用文本与加载集合，保留技能缺失 skip、三次 giveup、异常放行。
++删除闸只管递归删除及保护区/配置引用；不检查科学定义、普通写入、脚本逻辑、成本或结果交付。
++实际钩子是 agent/pre-step（本步 claimed 消息，可追加消息）、tools/pre-execute（dispatch前拒绝）、
++tools/post-execute（工具结果和下游accept/block）、agent/disposed（清理）。后置登记必须在
++await next()后；post不能撤销已经执行的动作。本插件没有已验证的最终回复提交/拒绝钩子，
++不控制进程内部及远端调度。此次只沿用这些已用接口，没有编造新事件。
++
++### 改动、触发、判定、落盘及代价（按收益/代价，七条）
++
++1. **index.js/apply 的 post-execute、pre-step、disposed：同步加载证据。**
++   下游accept且isError=false的skill结果才登记，同时并入ledger并写原trace的skill-loaded。
++   工具空步也从gate读取loaded；disposed清两套状态及发布记录。代价是加载时一条小日志，
++   消除“加载过却loaded永远为空”的误判；不把加载当作遵守。
++
++2. **compliance.js/bioCommand、pre、post：帮助读取断言。**
++   仅在已加载bioinformatics-toolkit的会话中，直接裸名MAFFT/IQ-TREE计算命令要求先前独立
++   --help/-h成功输出。accept、isError=false、非空，且含Usage:/Options:或--参数形式才计证据；
++   同会话30分钟TTL，版本查询不算帮助，同调用后追加帮助不能解锁。落盘独立审计。
++   代价是一条帮助调用和到期重读；“不确定”不可观察，所以保守检查首次使用。
++   熟悉工具仍须重读、非零帮助退出/特殊输出可能误拦；路径、SSH、复合shell、脚本内部明确漏检。
++
++3. **compliance.js/validatePolicy、pre、post：枚举断言和绑定。**
++   显式策略protect区分大小写子串触发，触发后完整command必须等于登记action。
++   assertions指定先前完整command及真实outputIncludes；同工具名、会话、策略SHA256、
++   输入/脚本/引用SHA256、30分钟TTL全部成立才放行。验证期间输入变了不登记。
++   可配置打印列名、绝对删除清单、小样本解析等，动作里注释“检查过”不能替代先前输出。
++   落盘compliance-preflight/result/deny；新闸不在多次拒绝后降级。缺agent.id不共享匿名证据。
++   代价是精确命令配置和线性哈希I/O；action最多64文件/64断言/16裁定，策略最多128动作/触发串，
++   1MiB字符；会话LRU64，pending/evidence各128，disposed清理。脚本能打印伪OK，输出存在不能
++   证明科学正确，也不能防蓄意伪造。策略未设置时不自动推断项目约束。
++
++4. **compliance.js/validatePolicy、pre：昂贵动作前置条件。**
++   estimates显式四项中任一wallSeconds≥300、cpuSeconds≥1800、outputBytes≥104857600、
++   networkRequests≥100，须hypothesis、至少一个已成功便宜验证、abortWhen及固定输入SHA256。
++   未知/缺字段拒，执行前await落盘假设/预算/中止条件，审计失败就拒。
++   代价是计划和样本检查；阈值为保守初值，未校准，填低估计会漏检。不从任意shell或timeout猜成本。
++   abortWhen仅留证，插件不自动监测/杀进程；没有通用实际CPU/网络请求观察接口。--thread不是CPU配额。
++
++5. **compliance.js/pre：裁定原文与参数冻结。**
++   rulings含用户原文quote、来源path、文件SHA256、审核后的required参数片段。来源变、原话不在
++   文件、片段不符或完整command变了均拒。MEMORY同时含>12000和>12200错误叙述，不能自动取
++   “最后一个数字”；需人确认quote→参数映射，例如--threads 16、--max-length 12000。
++   落盘策略摘要与拒绝原因，不改MEMORY。代价是MEMORY任意变化也须重审哈希、等价命令改写也被拒。
++   required是字串检查，不是shell AST或科学语义；完整command必须审核，包含16不证明脚本实际用16。
++
++6. **compliance.js/pre、post：旧来源及结果回执。**
++   输入/脚本/引用须固定SHA256；script/reference缺version/generatedAt/合法inputs[{path,sha256}]，
++   或生成时间超过24小时/在未来，写warnings。哈希吻合不能证明旧脚本无bug。
++   后置回执含插件版本、生成时间、来源SHA、原始文本前2048字符、保留文本SHA、实际输出文件SHA/bytes。
++   文本只保留前65536字符，哈希范围明标，不冒充全stdout哈希。文件流式哈希前后stat检测变化；
++   产物不存在、期间来源变动、输出size和mtime均未更新时receiptComplete=false。
++   Script/Process running通知不作完成证据；远端/后台须另做实际完成验证。审计失败保留已执行事实，
++   不登记后续解锁，原trace写compliance-audit-error。落盘~/.dsh/skill-gate-compliance.ndjson，
++   DSH_SKILL_GATE_COMPLIANCE_TRACE可改路径。代价是各阶段顺序读受管文件，219MB对应线性磁盘I/O，
++   不扫全目录。并发外部写入、哈希间隙、已存在bug仍是边界。回执只在日志，不能禁止最终回复说“完成”，
++   不能保证回复贴出证据，也不能保证tmux窗口真的可见；需执行端核验或回复发布接口。
++
++7. **index.js/pre-execute、package、测试与说明：接线与恢复。**
++   总开关和文件kill switch现在对全部执行闸生效；格式专用开关只关原加载闸。
++   下游pre拒绝/抛异常则取消pending，相同命令并发拒；后置只消费一次。
++   旧加载闸maxDeny保留，新依从闸不三次给过。错误/缺失的已配置策略会拒shell工具，
++   可修配置或/skill-gate off恢复；skill/read/write不受新模块拦。
++   代价是配置错时需显式恢复。新增compliance.test.mjs及applygate接线回归，judge等原逻辑保留。
++
++### 策略例子与使用范围
++
++默认仅新增第2条窄帮助断言。昂贵计划、列名/删除清单、口径、旧脚本/产物回执均须
++DSH_SKILL_GATE_POLICY指向**用户审核的绝对路径JSON**。技能目录/正文没有机器断言规范，
++故不自动把全文“必须”变成闸。下面是格式例子，**未部署**；REPLACE_*故意无效，要填真实SHA256。
++validate-sample.py应独立验证IUPAC、是否插GN前缀、长度、列名，不能只打印OK；本插件不能背书坏验证脚本。
++
++```json
++{
++  "version": 1,
++  "protect": ["run-analysis.py"],
++  "actions": [{
++    "command": "python run-analysis.py --threads 16 --max-length 12000",
++    "files": [
++      {"path": "data/input.fasta", "role": "input", "sha256": "REPLACE_INPUT_SHA256"},
++      {"path": "run-analysis.py", "role": "script", "sha256": "REPLACE_SCRIPT_SHA256",
++       "version": "reviewed-v2", "generatedAt": "2026-10-12T08:00:00Z",
++       "inputs": [{"path": "data/input.fasta", "sha256": "REPLACE_INPUT_SHA256"}]},
++      {"path": "data/aligned.fasta", "role": "output"}
++    ],
++    "rulings": [{
++      "path": "D:/基孔肯雅/MEMORY.md",
++      "sha256": "REPLACE_MEMORY_SHA256",
++      "quote": "对齐和建树都使用16线程自动探索",
++      "required": ["--threads 16"]
++    }],
++    "estimates": {"wallSeconds": 600, "cpuSeconds": 9600, "outputBytes": 219148165, "networkRequests": 0},
++    "hypothesis": "样本保留简并码且无GN前缀；长度使用审核过的12000口径",
++    "abortWhen": "样本长度或字符检查不符即停止；实跑超预算由执行端停止",
++    "assertions": [{"command": "python validate-sample.py", "outputIncludes": "IUPAC=OK; prefix=OK; columns=id,length"}]
++  }]
++}
++```
++
++12000口径另配真实用户裁定rulings，不能把hypothesis当用户原话。
++管MAFFT/IQ-TREE/SSH包装/旧脚本，在protect放审核过的触发串并登记完整action。
++独立帮助/version即使命中protect也放行，防解锁死锁。列名用实际字段行；删除清单每条目标路径
++设独立断言，完整删除command固定LiteralPath。变量化目标和任意shell语法不新增猜测拦截。
++能修改策略/环境变量的agent可以弱化保护，故策略不是安全隔离边界，需要用户审核及外部保护；
++本次没有改权限、创建真实项目策略、运行科研任务或修改MEMORY。
++
++### 不可行、误伤及尚未完成
++
++不加逐次LLM“是否遵守”裁判：看不到内部动作，不产生帮助/文件证据，却增加延迟/token；
++不把加载、注释含--help、自称验证通过当依从。不从MEMORY最后数字抽标准，不从技能全文抽硬闸，
++不把所有Python/长timeout/扩展名当昂贵动作，不全目录扫旧文件，不自动杀远端进程。
++这些会误伤查询、写文档、小任务及其他用户进程；没有可靠契约。post block不算回滚。
++
++**误拦率未测，不能报百分比。** 单测负例和预期拒绝不是生产金标。默认窄规则开销小但覆盖窄；
++显式策略成本为维护和哈希I/O，protect子串可能误伤示例文本，大小写/别名/脚本隐藏可能漏检。
++五类失败的覆盖为帮助前置、显式昂贵计划、脚本哈希+独立样本检查、命令/裁定冻结、结果日志回执；
++科学语义、最终回复保证、远端真实完成/CPU/请求计数、自动中止都未实现，不声称“完全依从”。
++普通工具文本中退出码/后台通知的所有变体没有通用结构保证：isError=false只是工具服务成功标志，
++不能替任意脚本或远端进程的实际退出状态背书。
++
++### 本机验证与交付
++
++按仓库方式node --test --import ./_test/resolve-stub.mjs，避免无stub时跳过apply()。
++首轮63个Node测试通过、0失败/跳过，judge内部21项也全通过。
++最终65个Node测试通过、0失败/取消/跳过，judge内部21项全通过；五个lib文件语法检查及git diff --check通过。
++最终输出及全部unified diff保存为docs/compliance-v18-test.log、docs/compliance-v18.patch。
++测试审计仅写OS临时目录，没有写活账本。离线验证不能替代用户刷新后真实DSH验证，尤其是
++不同工具失败/后台结果、远端文件可见性、command原文及agent.id连续性；本次按授权留给用户手动部署。
+diff --git a/lib/index.js b/lib/index.js
+index 09c35f9..0edf625 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -48,6 +48,7 @@ import {
+ } from "./judge.js";
+ import { skillGateDecision } from "./skillgate.js";
+ import { createSessionState } from "./sessionstate.js";
++import { createCompliance } from "./compliance.js";
+ 
+ export const name = "dsh-skill-router-and-gate";
+ export const inject = ["skills"];
+@@ -62,7 +63,7 @@ export const inject = ["skills"];
+  *   - 结果我花了多轮去分辨"现在跑的到底是哪一版"。
+  * 有了版本号，看一眼账本就知道，不用再猜。
+  */
+-export const VERSION = 17;
++export const VERSION = 18;
+ 
+ /* ──────────────────────────── 配置 ──────────────────────────── */
+ 
+@@ -946,6 +947,8 @@ export function apply(ctx) {
+ 
+   // v14.3：闸门状态容器（按会话 + LRU 上限 + drop），见 lib/sessionstate.js
+   const gate = createSessionState({ maxSessions: cfg.ledgerMaxSessions });
++  const compliance = createCompliance({ maxSessions: cfg.ledgerMaxSessions, version: VERSION,
++    auditPath: process.env.DSH_SKILL_GATE_COMPLIANCE_TRACE || join(homedir(), ".dsh", "skill-gate-compliance.ndjson") });
+   const denyText = () => {
+     const agg = gate.denySummary();
+     return agg.size ? [...agg].map(([k, v]) => `${k}×${v}`).join(" ") : "无";
+@@ -1130,7 +1133,7 @@ export function apply(ctx) {
+     const all = decision.messages ?? messages ?? [];
+     const sessionId = String(agent?.id ?? "unknown-session");
+     const ledger = ledgerFor(state, sessionId, cfg.ledgerMaxSessions);
+-    const alreadyLoaded = loadedSkillNames(all);
++    const alreadyLoaded = new Set([...loadedSkillNames(all), ...gate.loadedOf(sessionId)]);
+     for (const name of alreadyLoaded) ledger.confirmedLoaded.add(name);
+     const query = lastUserText(all);
+     const t0 = {
+@@ -1391,7 +1394,8 @@ export function apply(ctx) {
+   // 本闸只对**窄而高置信**的一类返回 deny，其余一律 next() 放行。
+   // v14.3（外部评审第二轮）：会话结束就清掉它的闸门状态（配合模块内的 LRU 上限，防长期累积）。
+   ctx.on("agent/disposed", ({ agent } = {}) => {
+-    try { if (agent?.id) gate.drop(agent.id); } catch { /* 清理失败不影响主流程 */ }
++    try { if (agent?.id) { gate.drop(agent.id); compliance.drop(agent.id);
++      state.ledger.delete(agent.id); state.catalogPublished.delete(agent.id); } } catch { /* 清理失败不影响主流程 */ }
+   });
+ 
+   // v14.2/v14.3：**只有 skill 工具最终被接受且成功时**才解锁闸门，且判在 `next()` **之后** ——
+@@ -1401,13 +1405,22 @@ export function apply(ctx) {
+     const decision = await next();
+     try {
+       if (exec?.name === "skill" && decision?.kind === "accept" && result?.isError === false) {
+-        gate.markLoaded(gate.sidOf(exec), exec?.arguments?.name);
++        const sid = gate.sidOf(exec);
++        const skill = exec?.arguments?.name;
++        if (gate.markLoaded(sid, skill)) {
++          ledgerFor(state, sid, cfg.ledgerMaxSessions).confirmedLoaded.add(skill.trim());
++          trace({ stage: "skill-loaded", ...gateCtx(exec), skill: skill.trim(), loaded: [...gate.loadedOf(sid)] });
++        }
+       }
+     } catch { /* 记账失败不影响结果 */ }
++    try { await compliance.post(exec, result, decision, gate.sidOf(exec)); }
++    catch (error) { trace({ stage: "compliance-audit-error", ...gateCtx(exec), reason: String(error?.message ?? error).slice(0, 200) }); }
+     return decision;
+   });
+ 
+   ctx.on("tools/pre-execute", async (exec, next) => {
++    // Master switch applies to all gates; retained format-specific switch only disables the load gate.
++    if (!state.enabled || existsSync(killSwitchPath)) return next();
+     // v14.2/v14.3：这里**只读**状态，不再登记"已加载"；一律按会话取（含目录）。
+     const sid = gate.sidOf(exec);
+     const loaded = new Set(gate.loadedOf(sid));
+@@ -1462,7 +1475,16 @@ export function apply(ctx) {
+       trace({ stage: "gate-deny", ...gateCtx(exec), tool: exec?.name, skill: deniedSkill, reason: String(reason).slice(0, 200) });
+       return { kind: "deny", reason };
+     }
+-    return next();
++    const adherence = await compliance.pre(exec, sid, loaded);
++    if (adherence) {
++      trace({ stage: "compliance-deny", ...gateCtx(exec), tool: exec?.name, reason: adherence.reason });
++      return adherence;
++    }
++    try {
++      const decision = await next();
++      if (decision?.kind !== "allow") compliance.cancel(exec, sid);
++      return decision;
++    } catch (error) { compliance.cancel(exec, sid); throw error; }
+   });
+ }
+ 
+diff --git a/package.json b/package.json
+index 2f7fb2e..3b142b2 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "dsh-skill-router-and-gate",
+-  "version": "0.1.3",
++  "version": "0.1.4",
+   "description": "Two-layer skill control for DeepSeek Harness: (1) a per-turn LLM judge — with a 9-way lexical fallback — that reads the live skill catalog and injects a ranked shortlist of the skills a task actually needs; (2) a hard gate on tools/pre-execute that DENIES a tool call when it requires a managed format (xlsx/docx/pptx/pdf/csv-tsv) but the matching skill was never loaded. Routing picks; the gate enforces.",
+   "type": "module",
+   "main": "./lib/index.js",
+@@ -63,6 +63,6 @@
+   },
+   "scripts": {
+     "test": "node --test --import ./_test/resolve-stub.mjs",
+-    "check": "node --check lib/index.js && node --check lib/judge.js && node --check lib/skillgate.js"
++    "check": "node --check lib/index.js && node --check lib/judge.js && node --check lib/skillgate.js && node --check lib/sessionstate.js && node --check lib/compliance.js"
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/lib/compliance.js b/lib/compliance.js
+new file mode 100644
+index 0000000..47439bc
+--- /dev/null
++++ b/lib/compliance.js
+@@ -0,0 +1,212 @@
++/** Deterministic, opt-in project contracts. No LLM interpretation of prose. */
++import { createHash } from "node:crypto";
++import { createReadStream } from "node:fs";
++import { readFile, stat, appendFile } from "node:fs/promises";
++import { isAbsolute, resolve } from "node:path";
++import { commandText } from "./skillgate.js";
++
++export const sha256 = (text) => createHash("sha256").update(text).digest("hex");
++const SHELL = /^(pwsh|bash|workflow|run_code)$/;
++const HASH = /^[a-f0-9]{64}$/;
++const LIMITS = { wallSeconds: 300, cpuSeconds: 1800, outputBytes: 100 * 1024 * 1024, networkRequests: 100 };
++const TTL = 30 * 60 * 1000;
++const nonempty = (v) => typeof v === "string" && !!v.trim();
++
++export function resultText(result) {
++  // Only actual text blocks; structuredContent and assistant assertions are not evidence.
++  return (Array.isArray(result?.content) ? result.content : [])
++    .filter((b) => b?.type === "text" && typeof b.text === "string")
++    .map((b) => b.text).join("\n").slice(0, 65536);
++}
++
++/** Narrow direct CLI grammar; quoted prose, remote wrappers and scripts are deliberately excluded. */
++export function bioCommand(text) {
++  const m = String(text).trim().match(/^(?:&\s*)?(mafft|iqtree(?:2|3)?)(?:\.exe)?\s+([^;\r\n|&]+)$/i);
++  if (!m) return null;
++  const args = m[2].trim();
++  return { tool: m[1].toLowerCase(), help: /^(?:--help|-h)$/.test(args), probe: /^(?:--help|-h|--version|-version)$/.test(args) };
++}
++
++async function fileHash(path) {
++  const before = await stat(path);
++  if (!before.isFile()) throw new Error(`不是普通文件: ${path}`);
++  const hash = createHash("sha256");
++  for await (const chunk of createReadStream(path)) hash.update(chunk);
++  const after = await stat(path);
++  if (before.size !== after.size || before.mtimeMs !== after.mtimeMs) throw new Error(`哈希期间文件改变: ${path}`);
++  return { path, sha256: hash.digest("hex"), bytes: after.size, modifiedAt: after.mtime.toISOString() };
++}
++
++function validatePolicy(p) {
++  if (p?.version !== 1 || !Array.isArray(p.protect) || !p.protect.length || p.protect.length > 128 || !p.protect.every(nonempty)
++      || !Array.isArray(p.actions) || p.actions.length > 128) throw new Error("策略须为 version=1，protect 非空字符串数组，actions 数组(≤128)");
++  for (const a of p.actions) {
++    if (!nonempty(a.command) || !Array.isArray(a.files) || a.files.length > 64 || !Array.isArray(a.assertions) || a.assertions.length > 64
++        || !Array.isArray(a.rulings) || a.rulings.length > 16) throw new Error("action 缺 command/files/assertions/rulings 或超过数组上限");
++    for (const f of a.files) {
++      if (!nonempty(f.path) || !["input", "script", "reference", "output"].includes(f.role)
++          || (f.role !== "output" && !HASH.test(f.sha256 ?? ""))) throw new Error("输入/脚本/引用须指定 path、role、sha256");
++    }
++    for (const r of a.rulings) {
++      if (!nonempty(r.path) || !nonempty(r.quote) || !HASH.test(r.sha256 ?? "")
++          || !Array.isArray(r.required) || !r.required.length || !r.required.every(nonempty)) throw new Error("裁定须含来源 path/sha256、原文 quote、required 参数片段");
++    }
++    for (const e of a.assertions) {
++      if (!nonempty(e.command) || !nonempty(e.outputIncludes)) throw new Error("断言须含先前 command 和真实 outputIncludes");
++    }
++    if (!a.estimates || Object.keys(LIMITS).some((k) => !Number.isFinite(a.estimates[k]) || a.estimates[k] < 0)) throw new Error("estimates 必须显式给出四项非负估计；未知不能填 null");
++    const expensive = Object.entries(LIMITS).some(([k, limit]) => a.estimates[k] >= limit);
++    if (expensive && (!nonempty(a.hypothesis) || !nonempty(a.abortWhen) || !a.assertions.length)) throw new Error("昂贵动作缺 hypothesis、便宜验证 assertions 或 abortWhen");
++    if (expensive && !a.files.some((f) => f.role === "input")) throw new Error("昂贵动作必须绑定至少一个输入 sha256");
++  }
++  return p;
++}
++
++export function createCompliance({ maxSessions = 64, auditPath, version, now = Date.now } = {}) {
++  const sessions = new Map();
++  const get = (sid) => {
++    let s = sessions.get(sid);
++    if (!s) s = { evidence: new Map(), pending: new Map(), help: new Map() };
++    sessions.delete(sid); sessions.set(sid, s);
++    while (sessions.size > maxSessions) sessions.delete(sessions.keys().next().value);
++    return s;
++  };
++  const audit = async (row) => {
++    if (!auditPath) throw new Error("依从审计路径未配置");
++    await appendFile(auditPath, JSON.stringify({ t: new Date(now()).toISOString(), v: version, ...row }) + "\n", "utf8");
++  };
++  const context = async (exec) => {
++    const cwd = exec?.agent?.session?.header?.cwd;
++    const configured = process.env.DSH_SKILL_GATE_POLICY;
++    if (!configured) return { digest: "no-policy", policy: null, cwd };
++    if (!isAbsolute(configured)) throw new Error("DSH_SKILL_GATE_POLICY 必须为绝对路径");
++    const raw = await readFile(configured, "utf8");
++    if (raw.length > 1024 * 1024) throw new Error("策略超过 1 MiB 字符上限");
++    return { digest: sha256(raw), policy: validatePolicy(JSON.parse(raw)), cwd };
++  };
++  const pathOf = (path, cwd) => {
++    if (!isAbsolute(path) && !cwd) throw new Error("相对文件路径缺 agent cwd");
++    return isAbsolute(path) ? path : resolve(cwd, path);
++  };
++  const snapshots = async (files, cwd) => {
++    const rows = [];
++    for (const f of files.filter((f) => f.role !== "output")) {
++      const row = await fileHash(pathOf(f.path, cwd));
++      if (row.sha256 !== f.sha256) throw new Error(`来源/输入哈希不符: ${f.path}`);
++      rows.push({ ...row, role: f.role, version: f.version ?? null, generatedAt: f.generatedAt ?? null, inputs: f.inputs ?? null });
++    }
++    return rows;
++  };
++  return {
++    drop(sid) { sessions.delete(sid); },
++    cancel(exec, sid) { sessions.get(sid)?.pending.delete(sha256(`${exec?.name}\n${commandText(exec)}`)); },
++    async pre(exec, sid, loaded) {
++      if (!SHELL.test(exec?.name ?? "")) return null;
++      const command = commandText(exec);
++      const bio = bioCommand(command);
++      const s = get(sid);
++      const key = sha256(`${exec.name}\n${command}`);
++      try {
++        // Checking every first direct use is conservative: uncertainty itself is unobservable.
++        if (loaded.has("bioinformatics-toolkit") && bio && !bio.probe
++            && now() - (s.help.get(bio.tool) ?? -Infinity) > TTL) {
++          return { kind: "deny", reason: `依从闸：先单独执行 ${bio.tool} --help 并取得成功的非空帮助输出，再调用该工具。证据有效期 30 分钟。` };
++        }
++        const c = await context(exec);
++        const protectedCall = !bio?.probe && c.policy?.protect.some((token) => command.includes(token));
++        const a = protectedCall ? c.policy.actions.find((a) => a.command === command) : null;
++        if ((protectedCall || bio?.help) && sid === "__noagent__") throw new Error("依从证据缺 agent.id，不能跨会话共享匿名桶");
++        if (protectedCall && !a) throw new Error("受管动作未绑定精确 command；请先在项目策略登记参数、输入与验证");
++        if (s.pending.has(key)) throw new Error("相同命令尚未返回结果；不能并发复用同一证据");
++        let sources = [];
++        if (a) {
++          const files = sources = await snapshots(a.files, c.cwd);
++          for (const r of a.rulings) {
++            const path = pathOf(r.path, c.cwd);
++            const raw = await readFile(path);
++            if (sha256(raw) !== r.sha256 || !raw.toString("utf8").includes(r.quote)) throw new Error(`用户裁定原文/来源改变: ${r.path}`);
++            if (r.required.some((value) => !command.includes(value))) throw new Error(`动作参数不符合用户裁定: ${r.quote}`);
++          }
++          for (const e of a.assertions) {
++            const proof = s.evidence.get(sha256(`${exec.name}\n${e.command}`));
++            if (!proof || proof.digest !== c.digest || now() - proof.at > TTL
++                || !proof.output.includes(e.outputIncludes)
++                || proof.files[a.command] !== JSON.stringify(files.map((f) => [f.path, f.sha256]))) throw new Error(`缺同会话、同策略、同输入的成功前置证据: ${e.command}`);
++          }
++          const warnings = [];
++          for (const f of a.files.filter((f) => ["script", "reference"].includes(f.role))) {
++            const generated = Date.parse(f.generatedAt);
++            if (!nonempty(f.version) || !Number.isFinite(generated) || !Array.isArray(f.inputs) || !f.inputs.length
++                || f.inputs.some((i) => !nonempty(i.path) || !HASH.test(i.sha256 ?? ""))) {
++              warnings.push(`${f.path}: 缺版本/生成时间/输入来源；哈希吻合也不能证明无 bug`);
++            } else if (now() - generated > 86400000 || generated > now()) {
++              warnings.push(`${f.path}: 引用了超过24小时或时间在未来的来源，需核查适用性`);
++            }
++          }
++          await audit({ stage: "compliance-preflight", session: sid, commandSha256: key, policySha256: c.digest,
++            hypothesis: a.hypothesis ?? null, abortWhen: a.abortWhen ?? null, estimates: a.estimates, files, warnings });
++        }
++        // Store only calls needed for proofs/help/receipts, never all shell activity.
++        const proofFor = c.policy?.actions.filter((a) => a.assertions.some((e) => e.command === command)) ?? [];
++        if (a || proofFor.length || bio?.help) {
++          if (s.pending.size >= 128) throw new Error("待返回动作超过 128；请结束或清理会话");
++          const proofFiles = {};
++          for (const action of proofFor) proofFiles[action.command] = JSON.stringify(
++            (await snapshots(action.files, c.cwd)).map((f) => [f.path, f.sha256]));
++          const outputBefore = {};
++          for (const f of a?.files.filter((f) => f.role === "output") ?? []) {
++            const path = pathOf(f.path, c.cwd);
++            try { const st = await stat(path); outputBefore[path] = [st.size, st.mtimeMs]; }
++            catch (error) { if (error.code !== "ENOENT") throw error; }
++          }
++          s.pending.set(key, { ...c, action: a, bio, proofFiles, proofFor, sources, outputBefore, started: now() });
++        }
++        return null;
++      } catch (error) {
++        const reason = `依从闸：${error.message}`;
++        try { await audit({ stage: "compliance-deny", session: sid, commandSha256: key, reason }); } catch { /* deny remains fail closed */ }
++        return { kind: "deny", reason };
++      }
++    },
++    async post(exec, result, decision, sid) {
++      const s = sessions.get(sid);
++      const key = sha256(`${exec?.name}\n${commandText(exec)}`);
++      const p = s?.pending.get(key);
++      if (!p) return;
++      s.pending.delete(key);
++      const output = resultText(result);
++      const success = decision?.kind === "accept" && result?.isError === false && !!output.trim()
++        && !/^\s*(?:Script|Process) running\b/im.test(output);
++      const artifacts = [];
++      let receiptError = null;
++      if (p.action && success) {
++        try {
++          for (const f of p.action.files.filter((f) => f.role === "output")) {
++            const path = pathOf(f.path, p.cwd);
++            const st = await stat(path);
++            const old = p.outputBefore[path];
++            if (old && old[0] === st.size && old[1] === st.mtimeMs) throw new Error(`产物未更新，不能宣称本次生成: ${path}`);
++            artifacts.push(await fileHash(path));
++          }
++          // Inputs/scripts changing during the action invalidate its provenance.
++          await snapshots(p.action.files, p.cwd);
++        } catch (error) { receiptError = error.message; }
++      }
++      let proofValid = success;
++      try { for (const action of p.proofFor) await snapshots(action.files, p.cwd); }
++      catch (error) { proofValid = false; receiptError = error.message; }
++      await audit({ stage: "compliance-result", session: sid, commandSha256: key, policySha256: p.digest,
++        accepted: decision?.kind === "accept", toolSuccess: result?.isError === false, evidence: success,
++        receiptComplete: !!p.action && success && !receiptError && artifacts.length > 0,
++        wallMs: now() - p.started, sources: p.sources, generatedAt: new Date(now()).toISOString(),
++        outputExcerpt: output.slice(0, 2048), outputSha256: sha256(output),
++        outputHashScope: "first-65536-text-characters", artifacts, receiptError });
++      // Persist first: failed audit IO must never unlock a subsequent action.
++      if (success && p.bio?.help && /(?:usage|options)\s*[:：]|--[a-z]/i.test(output)) s.help.set(p.bio.tool, now());
++      if (proofValid && Object.keys(p.proofFiles).length) {
++        s.evidence.set(key, { digest: p.digest, at: now(), output, files: p.proofFiles });
++        while (s.evidence.size > 128) s.evidence.delete(s.evidence.keys().next().value);
++      }
++    },
++  };
++}
+diff --git a/_test/compliance.test.mjs b/_test/compliance.test.mjs
+new file mode 100644
+index 0000000..8651788
+--- /dev/null
++++ b/_test/compliance.test.mjs
+@@ -0,0 +1,190 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { createCompliance, sha256, bioCommand } from "../lib/compliance.js";
++
++const dir = mkdtempSync(join(tmpdir(), "skillgate-compliance-"));
++const policyPath = join(dir, "policy.json");
++const input = join(dir, "input.fa");
++const output = join(dir, "output.fa");
++const memory = join(dir, "MEMORY.md");
++const quote = "对齐和建树都使用16线程自动探索";
++const command = "python run-analysis.py --threads 16 --max-length 12000";
++const verify = "python validate-sample.py";
++const success = (text) => ({ isError: false, content: [{ type: "text", text }] });
++const exec = (text, sid = "A") => ({ name: "pwsh", arguments: { command: text },
++  agent: { id: sid, session: { header: { cwd: dir } } } });
++function setup({ expensive = true, receipt = false } = {}) {
++  writeFileSync(input, ">x\nACGN\n");
++  writeFileSync(memory, quote);
++  const policy = { version: 1, protect: ["run-analysis"], actions: [{ command,
++    files: [{ path: input, role: "input", sha256: sha256(readFileSync(input)) },
++      ...(receipt ? [{ path: output, role: "output" }] : [])],
++    rulings: [{ path: memory, sha256: sha256(quote), quote, required: ["--threads 16", "--max-length 12000"] }],
++    estimates: { wallSeconds: expensive ? 600 : 1, cpuSeconds: 0, outputBytes: 0, networkRequests: 0 },
++    hypothesis: "小样本解析保持 IUPAC 且无 GN 前缀", abortWhen: "字符数或样本长度不符即中止",
++    assertions: [{ command: verify, outputIncludes: "columns: id,length; IUPAC=OK; prefix=OK" }] }] };
++  process.env.DSH_SKILL_GATE_POLICY = policyPath;
++  writeFileSync(policyPath, JSON.stringify(policy));
++  const auditPath = join(dir, `audit-${Math.random()}.ndjson`);
++  let clock = 100000;
++  const gate = createCompliance({ auditPath, version: 18, now: () => clock });
++  return { gate, policy, auditPath, tick: () => { clock += 1800001; }, save: () => writeFileSync(policyPath, JSON.stringify(policy)) };
++}
++async function proof(gate, sid = "A", result = success("columns: id,length; IUPAC=OK; prefix=OK"), decision = { kind: "accept" }) {
++  assert.equal(await gate.pre(exec(verify, sid), sid, new Set()), null);
++  await gate.post(exec(verify, sid), result, decision, sid);
++}
++const deny = async (gate, text = command, sid = "A") => {
++  const d = await gate.pre(exec(text, sid), sid, new Set());
++  assert.equal(d?.kind, "deny"); return d.reason;
++};
++
++test("默认：加载生信技能后需先前成功帮助输出；同调用追加帮助不能解锁", async () => {
++  delete process.env.DSH_SKILL_GATE_POLICY;
++  const g = createCompliance({ auditPath: join(dir, "help.ndjson"), version: 18 });
++  const loaded = new Set(["bioinformatics-toolkit"]);
++  assert.equal((await g.pre(exec("mafft --auto in.fa"), "A", loaded))?.kind, "deny");
++  assert.equal(await g.pre(exec("mafft --help"), "A", loaded), null);
++  await g.post(exec("mafft --help"), success("Usage: mafft --auto input"), { kind: "block" }, "A");
++  assert.equal((await g.pre(exec("mafft --auto in.fa"), "A", loaded))?.kind, "deny");
++  assert.equal(await g.pre(exec("mafft --help"), "A", loaded), null);
++  await g.post(exec("mafft --help"), success("Usage: mafft --auto input"), { kind: "accept" }, "A");
++  assert.equal(await g.pre(exec("mafft --auto in.fa"), "A", loaded), null);
++  assert.equal((await g.pre(exec("mafft --auto in.fa", "B"), "B", loaded))?.kind, "deny");
++  g.drop("A");
++  assert.equal((await g.pre(exec("mafft --auto in.fa"), "A", loaded))?.kind, "deny");
++});
++test("帮助语法窄匹配：搜索、字符串、版本、绝对路径与复合 shell 边界", () => {
++  assert.equal(bioCommand("Write-Output 'mafft --help'"), null);
++  assert.equal(bioCommand("mafft --help; mafft --auto x"), null);
++  assert.equal(bioCommand("ssh host mafft --auto x"), null);
++  assert.equal(bioCommand("C:/tools/mafft.exe --auto x"), null);
++  assert.equal(bioCommand("IQTREE3 --version").probe, true);
++});
++test("首次受管动作缺前置验证即拦，成功输出才解锁", async () => {
++  const { gate } = setup();
++  assert.match(await deny(gate), /成功前置证据/);
++  await proof(gate, "A", success("wrong columns"));
++  await deny(gate);
++  await proof(gate);
++  assert.equal(await gate.pre(exec(command), "A", new Set()), null);
++});
++test("失败/下游 block 不提供依从证据", async () => {
++  const { gate } = setup();
++  await proof(gate, "A", { ...success("columns: id,length; IUPAC=OK; prefix=OK"), isError: true });
++  await deny(gate);
++  await proof(gate, "A", success("columns: id,length; IUPAC=OK; prefix=OK"), { kind: "block" });
++  await deny(gate);
++});
++test("同会话、TTL、输入 sha、策略摘要全部绑定", async () => {
++  const { gate, tick, policy, save } = setup();
++  await proof(gate);
++  await deny(gate, command, "B");
++  tick(); await deny(gate);
++  await proof(gate);
++  writeFileSync(input, ">x\nGNACG\n");
++  assert.match(await deny(gate), /哈希不符/);
++  policy.actions[0].files[0].sha256 = sha256(readFileSync(input)); save();
++  await deny(gate); // changing the policy cannot launder old evidence
++});
++test("验证执行期间改变输入，不能登记证据", async () => {
++  const { gate } = setup();
++  assert.equal(await gate.pre(exec(verify), "A", new Set()), null);
++  writeFileSync(input, "changed");
++  await gate.post(exec(verify), success("columns: id,length; IUPAC=OK; prefix=OK"), { kind: "accept" }, "A");
++  writeFileSync(input, ">x\nACGN\n");
++  await deny(gate);
++});
++test("裁定逐字固定：来源改动、线程漂移、阈值漂移均拒", async () => {
++  const { gate } = setup(); await proof(gate);
++  assert.match(await deny(gate, command.replace("16", "32")), /精确 command/);
++  assert.match(await deny(gate, command.replace("12000", "12200")), /精确 command/);
++  writeFileSync(memory, quote + "\nagent 自选32");
++  assert.match(await deny(gate), /原文\/来源改变/);
++});
++test("即使重新登记错误 command，也不能违背固定的裁定映射", async () => {
++  const { gate, policy, save } = setup();
++  policy.actions[0].command = command.replace("16", "32"); save(); await proof(gate);
++  assert.match(await deny(gate, policy.actions[0].command), /不符合用户裁定/);
++});
++test("四类估计阈值各自要求假设、验证、中止条件；缺估计拒绝", async () => {
++  for (const [key, limit] of Object.entries({ wallSeconds: 300, cpuSeconds: 1800, outputBytes: 104857600, networkRequests: 100 })) {
++    const { gate, policy, save } = setup({ expensive: false });
++    policy.actions[0].estimates[key] = limit; policy.actions[0].hypothesis = ""; save();
++    assert.match(await deny(gate), /昂贵动作/);
++  }
++  const { gate, policy, save } = setup(); delete policy.actions[0].estimates.cpuSeconds; save();
++  assert.match(await deny(gate), /estimates/);
++});
++test("结果回执记录真实片段、输入和产物 SHA256；旧输出不可算本次产物", async () => {
++  const { gate, auditPath } = setup({ receipt: true });
++  await proof(gate); assert.equal(await gate.pre(exec(command), "A", new Set()), null);
++  writeFileSync(output, "new artifact " + Math.random());
++  await gate.post(exec(command), success("records=1; IUPAC=OK"), { kind: "accept" }, "A");
++  const rows = readFileSync(auditPath, "utf8").trim().split("\n").map(JSON.parse);
++  const receipt = rows.at(-1);
++  assert.equal(receipt.receiptComplete, true);
++  assert.equal(receipt.artifacts[0].sha256, sha256(readFileSync(output)));
++  assert.equal(receipt.sources[0].sha256, sha256(readFileSync(input)));
++  assert.match(receipt.outputExcerpt, /records=1/);
++  assert.equal(await gate.pre(exec(command), "A", new Set()), null);
++  await gate.post(exec(command), success("done"), { kind: "accept" }, "A");
++  const last = JSON.parse(readFileSync(auditPath, "utf8").trim().split("\n").at(-1));
++  assert.equal(last.receiptComplete, false); assert.match(last.receiptError, /产物未更新/);
++});
++test("旧脚本/引用哈希不符硬拒；缺完整来源标注告警", async () => {
++  const { gate, policy, save, auditPath } = setup();
++  policy.actions[0].files[0].role = "script";
++  policy.actions[0].estimates.wallSeconds = 1; save(); await proof(gate);
++  assert.equal(await gate.pre(exec(command), "A", new Set()), null);
++  assert.match(readFileSync(auditPath, "utf8"), /缺版本/);
++  gate.cancel(exec(command), "A");
++  writeFileSync(input, "old broken script"); assert.match(await deny(gate), /哈希不符/);
++});
++test("策略损坏/不存在、审计 IO 失败均不能静默解锁；无策略不误伤普通动作", async () => {
++  const { gate } = setup(); writeFileSync(policyPath, "bad JSON"); await deny(gate);
++  process.env.DSH_SKILL_GATE_POLICY = join(dir, "missing.json"); await deny(gate);
++  delete process.env.DSH_SKILL_GATE_POLICY;
++  assert.equal(await gate.pre(exec("Get-ChildItem"), "A", new Set()), null);
++  const g = createCompliance({ auditPath: join(dir, "missing-parent", "audit") });
++  assert.equal(await g.pre(exec("mafft --help"), "A", new Set()), null);
++  await assert.rejects(g.post(exec("mafft --help"), success("Usage: mafft --auto"), { kind: "accept" }, "A"));
++  assert.equal((await g.pre(exec("mafft --auto x"), "A", new Set(["bioinformatics-toolkit"])))?.kind, "deny");
++});
++test("下游拒绝后 cancel 清 pending；重复并发拒；匿名证明拒", async () => {
++  const { gate } = setup(); await proof(gate);
++  assert.equal(await gate.pre(exec(command), "A", new Set()), null);
++  assert.match(await deny(gate), /尚未返回/);
++  gate.cancel(exec(command), "A");
++  assert.equal(await gate.pre(exec(command), "A", new Set()), null);
++  assert.match(await deny(gate, command, "__noagent__"), /agent.id/);
++});
++test("后台启动通知不能算完成或验证证据", async () => {
++  const { gate } = setup();
++  await proof(gate, "A", success("Script running with cell ID 1\ncolumns: id,length; IUPAC=OK; prefix=OK"));
++  await deny(gate);
++});
++test("多个动作共享一次验证分别绑定各自输入，不重复拼接", async () => {
++  const { gate, policy, save } = setup();
++  policy.actions.push({ ...policy.actions[0], command: command + " --second" }); save();
++  await proof(gate);
++  assert.equal(await gate.pre(exec(command), "A", new Set()), null);
++  assert.equal(await gate.pre(exec(command + " --second"), "A", new Set()), null);
++});
++test("策略保护 mafft 时仍允许独立 help/version，避免把解锁路径挡死", async () => {
++  const { gate, policy, save } = setup(); policy.protect.push("mafft"); save();
++  assert.equal(await gate.pre(exec("mafft --help"), "A", new Set()), null);
++  assert.equal(await gate.pre(exec("mafft --version"), "A", new Set()), null);
++});
++test("带完整标注的旧引用超过24小时仍告警，来源信息写入审计", async () => {
++  const { gate, policy, save, auditPath } = setup({ expensive: false });
++  Object.assign(policy.actions[0].files[0], { role: "reference", version: "v1", generatedAt: "2020-01-01T00:00:00Z",
++    inputs: [{ path: "raw.gb", sha256: "a".repeat(64) }] }); save(); await proof(gate);
++  assert.equal(await gate.pre(exec(command), "A", new Set()), null);
++  const last = JSON.parse(readFileSync(auditPath, "utf8").trim().split("\n").at(-1));
++  assert.match(last.warnings[0], /超过24小时或时间在未来/);
++  assert.equal(last.files[0].version, "v1");
++});
