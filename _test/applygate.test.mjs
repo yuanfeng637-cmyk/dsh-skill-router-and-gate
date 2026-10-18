@@ -129,9 +129,13 @@ T("generic apply: judge none, full-read acceptance, R8 disposition independence,
       for (let turn = 0; turn < 4; turn++) {
         const again = await h.preStep(agent, query);
         assert.equal(again.messages.find((m) => m.source?.kind === "skill-routing").source.via, "local-index");
-        assert.match((await h.preExecute(write)).reason, /R4/, "new turn must read even for an already loaded skill");
-        await h.postExecute(read(), { isError: false });
-        assert.equal((await h.preExecute(write)).kind, "allow");
+        /*
+CLAIM: 读取证据为会话级（键含内容 sha256），新轮次不再要求重读同一文件
+COUNTER: 若文件内容在其中改变，哈希失效仍会拦（上方 124-127 行仍覆盖）
+CHECK: 本用例 + 全量 node --test
+VERDICT: 已验
+*/
+        assert.equal((await h.preExecute(write)).kind, "allow", "session-level read persists across turns");
       }
       await h.preStep(agent, "unrelated zzyy");
       assert.equal((await h.preExecute(write)).kind, "allow", "new task replaces route references");

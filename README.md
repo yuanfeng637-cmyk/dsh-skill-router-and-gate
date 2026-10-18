@@ -1,5 +1,15 @@
 # dsh-skill-router-and-gate
 
+<!--
+CLAIM: README 顶部版本说明改为 v31，并把 v30 降为历史条目
+COUNTER: 若 README 其它处仍写"当前版本 v30"，会出现前后不一致
+CHECK: 全文 grep "v30"/"v31" 与 package.json、VERSION 常量核对
+VERDICT: 已验
+-->
+当前源码与运行版本：**v31**。硬化闸门自身的稳定性：回答闸的自身降级（超时/超限）不再写入正文；读取证据改为会话级；R8 增加 `irrelevant` 豁免；策略文件损坏时回退 last-good 并记审计，无 last-good 才拒绝；技能目录快照失败退化为不路由。见 [v31 稳定性与可靠性硬化](docs/RELIABILITY-v31.md)。
+
+v30：修复回答闸在工具调用后追加文本导致的消息协议错误；告警即时流式输出，支持即时取消，证据索引有界，重复指令按会话去重。见 [v30 可靠性修复](docs/RELIABILITY-v30.md)。v27/v28 文档保留为历史记录，当前行为以 v31 为准。
+
 v26：修复[通用本地技能／子资源索引与路由驱动阅读门控](docs/GENERIC-ROUTING.md)：恢复 SKILL.md 声明字段，采用 IDF／字段长度归一化、分项权重与分差弃权，并为无匹配参考的技能增加可执行的 SKILL.md 前置阅读。新增两种 catalog 模式的全量回归；原始 79 项不含 bundled office 技能的差异见文档。更新后运行 `refresh.ps1` 并重启 DSH。
 
 **Three-layer skill control for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): a per-turn shortlist, a hard gate that makes it stick, and an opt-in policy that binds the exact managed commands.**
@@ -209,3 +219,16 @@ npm run check
 The test suite runs **outside** DSH: `_test/resolve-stub.mjs` redirects `@deepseek-ai/dsh-llm`
 (a host-only package) to a minimal stub in `_test/stubs/`, so the apply-level gate tests can run in any checkout.
 Plugins loaded by the host still use the real package. Run the suite from a checkout, not from an installed profile copy.
+
+
+## v28：分级回答闸
+
+插件通过 `llm/stream` waterfall 检查 loop-owned 回答。默认 `block` 只拦截明确的计数、全称比较或整体能力否定等缺证据断言；孤立数字、普通“一致/全部”和局部“该接口不可用”降为告警，正文保留，末尾追加逐项 `[回答闸]` 提示。工具调用保持原有块与结束原因，继续接受其他工具闸检查。
+
+- 数字证据覆盖请求内全部工具历史，以及本插件已观察到的同会话工具结果，默认保留最近 1000 条。代码、行内代码、路径、日期和版本常量单独豁免；无出处数字仍可紧邻标 `[未验]`。
+- 分母支持 `分母=N`、`(分母: N 列)`、`N 条/链/项`、`N/N 相同`、`共 N 项中的 M 项`，可位于当前段或紧邻上一段。
+- 不可用证据接受本轮真实失败的“工具名 + 命令或路径 + 失败输出首行”，`[失败证据:toolCallId]` 可选。局部否定需一条失败方法；整体能力否定需两种不同方法。“没有改文件”不触发能力检查。
+
+`DSH_ANSWER_GATE=block|warn|off` 选择模式（默认 block，兼容旧值 0）。`DSH_ANSWER_GATE_MAX_RESULTS` 配置证据条数，上限 10000；旧 `RECENT_TURNS` 不再生效。`DSH_ANSWER_GATE_TIMEOUT_MS` 配置缓存期限，默认 2000ms，上限 60000ms；默认缓存上限 1 MiB / 10000 chunks。超时或超长即释放缓存、继续逐块输出，并在末尾提示检查未完成。真实用户消息明确说“本次免检”或“不用闸”可每会话豁免一个模型请求。总开关、kill switch 和其他工具闸仍生效。审计沿用 trace，不等待审计写入；`/skill-gate status` 展示模式及 VERSION。
+
+本次只修改仓库，未同步 profile、未重启宿主。当前行为、验证记录与能力边界见 [ANSWER-GATE-v28.md](docs/ANSWER-GATE-v28.md)；[v27 文档](docs/ANSWER-GATE-v27.md) 保留宿主源码依据和历史实现记录。

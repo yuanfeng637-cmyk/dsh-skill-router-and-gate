@@ -12,3 +12,19 @@ export function createUserMessage(input) {
   return { ...base, content: input };
 }
 export default { createUserMessage };
+
+// Loop request ownership and assembler subset used by the answer gate integration tests.
+const loopRequests = new WeakSet();
+export function markAgentLoopRequest(request) { loopRequests.add(request); return request; }
+export function isAgentLoopRequest(request) { return loopRequests.has(request); }
+export class BlockAssembler {
+  partials = new Map();
+  push(c) {
+    if (c.index === undefined) return;
+    const p = this.partials.get(c.index) ?? { type: c.blockType ?? c.type.replace(/-delta$/, ""), text: "" };
+    if (c.type === "block-end") p.block = c.block;
+    else if (!p.block && (c.type === "text-delta" || c.type === "reasoning-delta")) p.text += c.text;
+    this.partials.set(c.index, p);
+  }
+  blocks() { return [...this.partials.values()].map((p) => p.block ?? { type: p.type, text: p.text }); }
+}
