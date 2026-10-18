@@ -11,6 +11,7 @@
  *   · 账本指向临时文件（`DSH_SKILL_GATE_TRACE=<路径>`），不碰真账本。
  */
 import { test } from "node:test";
+process.env.DSH_ANSWER_GATE ??= "block"; // v32: default off; tests opt in
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -1,5 +1,6 @@
 // Verify warnings never follow tool calls and modified text does not keep stale replay metadata.
 import { test } from 'node:test';
+process.env.DSH_ANSWER_GATE ??= "block"; // v32: default off; tests opt in
 import assert from 'node:assert/strict';
 import { guardAnswerStream } from '../lib/answergate.js';
 const input = [

@@ -1,14 +1,16 @@
 # dsh-skill-router-and-gate
 
 <!--
-CLAIM: README 顶部版本说明改为 v31，并把 v30 降为历史条目
-COUNTER: 若 README 其它处仍写"当前版本 v30"，会出现前后不一致
-CHECK: 全文 grep "v30"/"v31" 与 package.json、VERSION 常量核对
+CLAIM: README 顶部版本说明改为 v32（回答闸默认 off），v31/v30 降为历史条目
+COUNTER: 正文其他处若仍写"当前版本 v31"，会前后不一致（"以 v31 为准"一句需一起改）
+CHECK: 全文 grep v31/v32 与 package.json、VERSION 常量核对
 VERDICT: 已验
 -->
-当前源码与运行版本：**v31**。硬化闸门自身的稳定性：回答闸的自身降级（超时/超限）不再写入正文；读取证据改为会话级；R8 增加 `irrelevant` 豁免；策略文件损坏时回退 last-good 并记审计，无 last-good 才拒绝；技能目录快照失败退化为不路由。见 [v31 稳定性与可靠性硬化](docs/RELIABILITY-v31.md)。
+当前源码与运行版本：**v32**。回答闸改为**显式开启**：未设 `DSH_ANSWER_GATE` 时完全不介入（不注入合同说明、不包装流、不改正文），只有显式 `warn`／`block` 才启用检查。见 [v32 回答闸改为显式开启](docs/RELIABILITY-v32.md)。
 
-v30：修复回答闸在工具调用后追加文本导致的消息协议错误；告警即时流式输出，支持即时取消，证据索引有界，重复指令按会话去重。见 [v30 可靠性修复](docs/RELIABILITY-v30.md)。v27/v28 文档保留为历史记录，当前行为以 v31 为准。
+v31：硬化闸门自身稳定性：自身降级（超时/超限）不再写入正文；读取证据改为会话级；R8 增加 `irrelevant` 豁免；策略损坏回退 last-good；技能目录快照失败退化为不路由。见 [v31 稳定性与可靠性硬化](docs/RELIABILITY-v31.md)。
+
+v30：修复回答闸在工具调用后追加文本导致的消息协议错误；告警即时流式输出，支持即时取消，证据索引有界，重复指令按会话去重。见 [v30 可靠性修复](docs/RELIABILITY-v30.md)。v27/v28 文档保留为历史记录，当前行为以 v32 为准。
 
 v26：修复[通用本地技能／子资源索引与路由驱动阅读门控](docs/GENERIC-ROUTING.md)：恢复 SKILL.md 声明字段，采用 IDF／字段长度归一化、分项权重与分差弃权，并为无匹配参考的技能增加可执行的 SKILL.md 前置阅读。新增两种 catalog 模式的全量回归；原始 79 项不含 bundled office 技能的差异见文档。更新后运行 `refresh.ps1` 并重启 DSH。
 

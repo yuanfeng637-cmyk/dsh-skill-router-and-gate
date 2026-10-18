@@ -1,5 +1,6 @@
 // Regression coverage for bounded evidence, cancellation and streaming advisory checks.
 import { test } from 'node:test';
+process.env.DSH_ANSWER_GATE ??= "block"; // v32: default off; tests opt in
 import assert from 'node:assert/strict';
 import { collectAnswerEvidence, createAnswerGateState, checkAnswer, guardAnswerStream } from '../lib/answergate.js';
 import { runJudge, parseJudgeOutput } from '../lib/judge.js';

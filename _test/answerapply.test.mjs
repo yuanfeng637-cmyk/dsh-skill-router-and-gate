@@ -1,5 +1,6 @@
 // Purpose: exercise registered hooks, not just validators; npm test supplies host exports stub.
 import { test } from "node:test";
+process.env.DSH_ANSWER_GATE ??= "block"; // v32: default off; tests opt in
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

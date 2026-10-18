@@ -1,4 +1,5 @@
 import { test } from "node:test";
+process.env.DSH_ANSWER_GATE ??= "block"; // v32: default off; tests opt in
 import assert from "node:assert/strict";
 import { collectAnswerEvidence, checkAnswer, guardAnswerStream, numbersOf, createAnswerGateState, answerGateMode } from "../lib/answergate.js";
 const user = (text = "compare") => ({ role: "user", source: { kind: "user" }, content: [{ type: "text", text }] });
@@ -173,8 +174,14 @@ test("provider error and aborted finishes are preserved with tool chunks", async
     assert.deepEqual(await collect(guardAnswerStream(source(input), { assemble })), input);
   }
 });
-test("mode parser supports warn/block/off, legacy 0 and safe default", async () => {
-  for (const [value, expected] of [["warn", "warn"], ["block", "block"], ["off", "off"], ["0", "off"], ["oops", "block"]]) assert.equal(answerGateMode(value), expected);
+/*
+CLAIM: v32 起回答闸默认 off，只有显式 warn/block 才启用；未知值按 off 处理
+COUNTER: 旧调用方若依赖"未设置即 block"，升级后行为会变；这是刻意变更，已在 docs/RELIABILITY-v32.md 写明
+CHECK: 本用例 + 全量 node --test
+VERDICT: 已验
+*/
+test("mode parser: explicit warn/block only, everything else is off", async () => {
+  for (const [value, expected] of [["warn", "warn"], ["block", "block"], ["Block", "block"], ["off", "off"], ["0", "off"], ["oops", "off"], ["", "off"]]) assert.equal(answerGateMode(value), expected);
   assert.deepEqual(await run("999 列", { mode: "off" }), chunksOf("999 列"));
 });
 test("one exemption per session, consumed once; quoted, negated and injected text do not grant it", async () => {
