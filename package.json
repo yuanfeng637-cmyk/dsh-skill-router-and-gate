@@ -16,8 +16,8 @@
     "cordis.patch.yml",
     "README.md",
     "LICENSE",
-    "docs/DESIGN.md",
-    "docs/GENERIC-ROUTING.md"
+    "docs/*.md",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
