@@ -1,33 +1,29 @@
 # dsh-skill-router-and-gate
 
-<!--
-CLAIM: README 顶部版本说明改为 v33（轻量化），v32/v31/v30 降为历史条目
-COUNTER: 正文其他处的"以 v32 为准"需同步改成 v33
-CHECK: 全文 grep v32/v33 与 package.json、VERSION 常量核对
-VERDICT: 已验
--->
-当前源码与运行版本：**v33**。轻量化：资源索引按目录签名缓存 10 分钟（不再每步重建），判定层加熔断（同会话连续 2 次超时后 5 分钟只走词法兜底）。见 [v33 轻量化](docs/RELIABILITY-v33.md)。
-
-v32：回答闸改为**显式开启**：未设 `DSH_ANSWER_GATE` 时完全不介入（不注入合同说明、不包装流、不改正文），只有显式 `warn`／`block` 才启用检查。见 [v32 回答闸改为显式开启](docs/RELIABILITY-v32.md)。
-
-v31：硬化闸门自身稳定性：自身降级（超时/超限）不再写入正文；读取证据改为会话级；R8 增加 `irrelevant` 豁免；策略损坏回退 last-good；技能目录快照失败退化为不路由。见 [v31 稳定性与可靠性硬化](docs/RELIABILITY-v31.md)。
-
-v30：修复回答闸在工具调用后追加文本导致的消息协议错误；告警即时流式输出，支持即时取消，证据索引有界，重复指令按会话去重。见 [v30 可靠性修复](docs/RELIABILITY-v30.md)。v27/v28 文档保留为历史记录，当前行为以 v33 为准。
-
-v26：修复[通用本地技能／子资源索引与路由驱动阅读门控](docs/GENERIC-ROUTING.md)：恢复 SKILL.md 声明字段，采用 IDF／字段长度归一化、分项权重与分差弃权，并为无匹配参考的技能增加可执行的 SKILL.md 前置阅读。新增两种 catalog 模式的全量回归；原始 79 项不含 bundled office 技能的差异见文档。更新后运行 `refresh.ps1` 并重启 DSH。
-
 **Three-layer skill control for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): a per-turn shortlist, a hard gate that makes it stick, and an opt-in policy that binds the exact managed commands.**
+
+DSH injects the whole skill catalog every turn and trusts the model to call the right skill by itself. In long
+sessions that breaks down: the catalog is there from the first message, yet skills stay untouched for thousands of
+turns. This plugin adds three layers on top of the catalog - routing picks, the gate enforces, the policy binds the
+commands that matter.
 
 | Layer | What it does |
 |---|---|
 | **Router** | On every turn, one in-process LLM judge reads the live skill catalog and injects a ranked shortlist of the skills the task actually needs. A 9-way lexical scorer takes over if the judge times out, errors, or returns invalid output. |
-| **Gate** | If a tool call needs a managed format (**xlsx / docx / pptx / pdf / csv-tsv**) and the matching skill was never loaded in this session, the call is **denied** — with an instruction to load the skill and re-send the same command. |
+| **Gate** | If a tool call needs a managed format (**xlsx / docx / pptx / pdf / csv-tsv**) and the matching skill was never loaded in this session, the call is **denied** - with an instruction to load the skill and re-send the same command. |
 | **Policy** (opt-in) | With `DSH_SKILL_GATE_POLICY` pointing at a project-owned JSON file, managed commands are **registered by exact text**, bound to input/script hashes, and require same-session successful evidence within a 30-minute TTL. No LLM interpretation of prose: the policy is data, and the trace ledger records every decision. |
 
 **Name vs. short handle.** The package and repository are `dsh-skill-router-and-gate`; the **slash command and
 environment variables use the short handle `skill-gate`** (`/skill-gate`, `DSH_SKILL_GATE_*`). Same plugin.
 
-## v0.2.0：可机检的依从约束（合规策略层）
+**Answer gate is opt-in.** The optional `llm/stream` check (numeric provenance, denominators, capability claims) is
+**off unless `DSH_ANSWER_GATE=warn|block`**. With it unset the plugin never injects text, wraps the stream, or rewrites
+an answer.
+
+当前版本 **v33**；逐版行为变化见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 合规策略层（可选开启）
+
 
 加载成功现在写 `skill-loaded`，并同步路由账本的 `loaded`。它证明加载，不能证明技能全部得到遵守。
 加载 `bioinformatics-toolkit` 后，首次直接执行裸命令 `mafft` / `iqtree` / `iqtree2` / `iqtree3`
